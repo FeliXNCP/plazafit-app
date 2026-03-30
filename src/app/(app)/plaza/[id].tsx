@@ -1,3 +1,4 @@
+import Ionicons from '@expo/vector-icons/Ionicons'
 import { useLocalSearchParams } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -51,6 +52,8 @@ export default function PlazaDetailScreen() {
   const [loading, setLoading] = useState(true)
   const [registering, setRegistering] = useState(false)
   const [checkedInToday, setCheckedInToday] = useState(false)
+  const [isFavorite, setIsFavorite] = useState(false)
+  const [favoriteLoading, setFavoriteLoading] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -60,6 +63,11 @@ export default function PlazaDetailScreen() {
   useEffect(() => {
     if (!id || !session?.user?.id) return
     checkTodayCheckin()
+  }, [id, session?.user?.id])
+
+  useEffect(() => {
+  if (!id || !session?.user?.id) return
+  checkFavoriteStatus()
   }, [id, session?.user?.id])
 
   async function fetchDetailData() {
@@ -170,6 +178,51 @@ export default function PlazaDetailScreen() {
     }
   }
 
+  async function checkFavoriteStatus() {
+  if (!session?.user?.id || !id) return
+
+  const { data, error } = await supabase
+    .from('favorite_plazas')
+    .select('id')
+    .eq('user_id', session.user.id)
+    .eq('plaza_id', Number(id))
+    .maybeSingle()
+
+  if (!error && data) setIsFavorite(true)
+  else setIsFavorite(false)
+}
+
+async function handleToggleFavorite() {
+  if (!session?.user?.id || !plaza) return
+
+  try {
+    setFavoriteLoading(true)
+
+    if (isFavorite) {
+      const { error } = await supabase
+        .from('favorite_plazas')
+        .delete()
+        .eq('user_id', session.user.id)
+        .eq('plaza_id', plaza.id)
+
+      if (error) throw error
+      setIsFavorite(false)
+    } else {
+      const { error } = await supabase.from('favorite_plazas').insert({
+        user_id: session.user.id,
+        plaza_id: plaza.id,
+      })
+
+      if (error) throw error
+      setIsFavorite(true)
+    }
+  } catch (error: any) {
+    Alert.alert('Error', error.message ?? 'No se pudo actualizar favorito.')
+  } finally {
+    setFavoriteLoading(false)
+  }
+}
+
   function getPublicImageUrl(path: string) {
     const { data } = supabase.storage.from('plaza-images').getPublicUrl(path)
     return data.publicUrl
@@ -216,6 +269,34 @@ export default function PlazaDetailScreen() {
 
       <Text style={styles.title}>{plaza.nombre}</Text>
       <Text style={styles.subtitle}>{plaza.comuna}</Text>
+
+      <Pressable
+        style={[
+          styles.favoriteButton,
+          isFavorite && styles.favoriteButtonActive,
+        ]}
+        onPress={handleToggleFavorite}
+        disabled={favoriteLoading}
+      >
+        <Ionicons
+          name={isFavorite ? 'heart' : 'heart-outline'}
+          size={18}
+          color={isFavorite ? '#fff' : '#166534'}
+        />
+        <Text
+          style={[
+            styles.favoriteButtonText,
+            isFavorite && styles.favoriteButtonTextActive,
+          ]}
+        >
+          {favoriteLoading
+            ? 'Actualizando...'
+            : isFavorite
+            ? 'Quitar de favoritos'
+            : 'Guardar en favoritos'}
+        </Text>
+      </Pressable>
+
 
       <Pressable
         style={[
@@ -426,5 +507,28 @@ const styles = StyleSheet.create({
   quantityText: {
     color: '#166534',
     fontWeight: '700',
+  },
+  favoriteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 14,
+    paddingVertical: 14,
+  },
+  favoriteButtonActive: {
+    backgroundColor: '#16a34a',
+    borderColor: '#16a34a',
+  },
+  favoriteButtonText: {
+    color: '#166534',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  favoriteButtonTextActive: {
+    color: '#fff',
   },
 })

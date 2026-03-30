@@ -22,6 +22,15 @@ type RecentCheckin = {
   } | null
 }
 
+type FavoritePlaza = {
+  id: number
+  plazas: {
+    id: number
+    nombre: string
+    comuna: string
+  } | null
+}
+
 export default function ProfileScreen() {
   const { session } = useSession()
 
@@ -32,6 +41,7 @@ export default function ProfileScreen() {
   const [totalPoints, setTotalPoints] = useState(0)
   const [totalVisits, setTotalVisits] = useState(0)
   const [recentCheckins, setRecentCheckins] = useState<RecentCheckin[]>([])
+  const [favorites, setFavorites] = useState<FavoritePlaza[]>([])
 
   useFocusEffect(
     useCallback(() => {
@@ -47,29 +57,49 @@ export default function ProfileScreen() {
       if (isInitialLoad) setLoading(true)
       else setRefreshing(true)
 
-      const { data, error } = await supabase
-        .from('plaza_checkins')
-        .select(
+      const [checkinsRes, favoritesRes] = await Promise.all([
+        supabase
+          .from('plaza_checkins')
+          .select(
+            `
+            id,
+            created_at,
+            points,
+            plazas (
+              nombre,
+              comuna
+            )
           `
-          id,
-          created_at,
-          points,
-          plazas (
-            nombre,
-            comuna
           )
-        `
-        )
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false })
+          .eq('user_id', session.user.id)
+          .order('created_at', { ascending: false }),
 
-      if (error) throw error
+        supabase
+          .from('favorite_plazas')
+          .select(
+            `
+            id,
+            plazas (
+              id,
+              nombre,
+              comuna
+            )
+          `
+          )
+          .eq('user_id', session.user.id)
+          .order('created_at', { ascending: false }),
+      ])
 
-      const checkins = (data ?? []) as RecentCheckin[]
+      if (checkinsRes.error) throw checkinsRes.error
+      if (favoritesRes.error) throw favoritesRes.error
+
+      const checkins = (checkinsRes.data ?? []) as RecentCheckin[]
+      const favoritePlazas = (favoritesRes.data ?? []) as FavoritePlaza[]
 
       setRecentCheckins(checkins.slice(0, 10))
       setTotalVisits(checkins.length)
       setTotalPoints(checkins.reduce((acc, item) => acc + item.points, 0))
+      setFavorites(favoritePlazas)
     } catch (error: any) {
       Alert.alert('Error', error.message ?? 'No se pudo cargar el perfil')
     } finally {
@@ -77,6 +107,10 @@ export default function ProfileScreen() {
       setRefreshing(false)
     }
   }
+
+
+
+
 
   async function handleLogout() {
     const { error } = await supabase.auth.signOut()
@@ -134,6 +168,28 @@ export default function ProfileScreen() {
           <Text style={styles.statLabel}>Visitas</Text>
         </View>
       </View>
+
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Plazas favoritas</Text>
+
+        {favorites.length === 0 ? (
+          <Text style={styles.emptyText}>Todavía no tienes plazas favoritas.</Text>
+        ) : (
+          favorites.map((favorite) => (
+            <View key={favorite.id} style={styles.checkinItem}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.checkinTitle}>
+                  {favorite.plazas?.nombre ?? 'Plaza'}
+                </Text>
+                <Text style={styles.checkinSubtitle}>
+                  {favorite.plazas?.comuna ?? 'Sin comuna'}
+                </Text>
+              </View>
+            </View>
+          ))
+        )}
+      </View>
+
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Últimas visitas</Text>
