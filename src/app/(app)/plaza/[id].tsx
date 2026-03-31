@@ -1,5 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { useLocalSearchParams } from 'expo-router'
+import * as Location from 'expo-location'
+import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
@@ -14,6 +15,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useSession } from '../../../providers/session-provider'
 import type { Database } from '../../../types/database.types'
+import { getDistanceInMeters } from '../../../utils/distance'
 
 type Plaza = Database['public']['Tables']['plazas']['Row']
 type PlazaImage = Database['public']['Tables']['plaza_images']['Row']
@@ -36,6 +38,7 @@ type PlazaMachineRaw = {
 
 type NormalizedMachine = {
   id: number
+  machineTypeId: number
   quantity: number
   notes: string | null
   name: string
@@ -54,6 +57,7 @@ export default function PlazaDetailScreen() {
   const [checkedInToday, setCheckedInToday] = useState(false)
   const [isFavorite, setIsFavorite] = useState(false)
   const [favoriteLoading, setFavoriteLoading] = useState(false)
+  const [distanceToPlaza, setDistanceToPlaza] = useState<number | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -88,6 +92,7 @@ export default function PlazaDetailScreen() {
           .select(
             `
             id,
+            machine_type_id,
             quantity,
             notes,
             machine_types (
@@ -106,21 +111,21 @@ export default function PlazaDetailScreen() {
       setPlaza(plazaRes.data ?? null)
       setImages(imagesRes.data ?? [])
 
-      const normalizedMachines = ((machinesRes.data ?? []) as PlazaMachineRaw[]).map(
-        (item) => {
-          const machineType = Array.isArray(item.machine_types)
-            ? item.machine_types[0]
-            : item.machine_types
+      const normalizedMachines = ((machinesRes.data ?? []) as any[]).map((item) => {
+        const machineType = Array.isArray(item.machine_types)
+          ? item.machine_types[0]
+          : item.machine_types
 
-          return {
-            id: item.id,
-            quantity: item.quantity,
-            notes: item.notes,
-            name: machineType?.name ?? 'Máquina',
-            category: machineType?.category ?? null,
-          }
+        return {
+          id: item.id,
+          machineTypeId: item.machine_type_id,
+          quantity: item.quantity,
+          notes: item.notes,
+          name: machineType?.name ?? 'Máquina',
+          category: machineType?.category ?? null,
         }
-      )
+      })
+
 
       setMachines(normalizedMachines)
     } catch (error: any) {
@@ -148,35 +153,85 @@ export default function PlazaDetailScreen() {
   }
 
   async function handleCheckin() {
-    if (!session?.user?.id || !plaza) return
+  if (!session?.user?.id || !plaza) return
 
-    try {
-      setRegistering(true)
+  try {
+    setRegistering(true)
 
-      const { error } = await supabase.from('plaza_checkins').insert({
-        user_id: session.user.id,
-        plaza_id: plaza.id,
-        points: 10,
+    const servicesEnabled = await Location.hasServicesEnabledAsync()
+    if (!servicesEnabled) {
+      Alert.alert(
+        'Ubicación desactivada',
+        'Activa la ubicación del dispositivo para registrar tu visita.'
+      )
+      return
+    }
+
+    const permission = await Location.requestForegroundPermissionsAsync()
+    if (permission.status !== 'granted') {
+      Alert.alert(
+        'Permiso necesario',
+        'Necesitamos acceso a tu ubicación para validar la visita.'
+      )
+      return
+    }
+
+    let userLocation = await Location.getLastKnownPositionAsync({
+      maxAge: 60 * 1000,
+      requiredAccuracy: 100,
+    })
+
+    if (!userLocation) {
+      userLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
       })
+    }
 
-      if (error) {
-        if (error.code === '23505') {
-          setCheckedInToday(true)
-          Alert.alert('Ya registrado', 'Ya registraste una visita en esta plaza hoy.')
-          return
-        }
+    const distance = getDistanceInMeters(
+      userLocation.coords.latitude,
+      userLocation.coords.longitude,
+      plaza.lat,
+      plaza.lng
+    )
 
-        throw error
+    setDistanceToPlaza(distance)
+
+    const MAX_DISTANCE_METERS = 100
+
+    if (distance > MAX_DISTANCE_METERS) {
+      Alert.alert(
+        'Demasiado lejos',
+        `Debes estar a menos de ${MAX_DISTANCE_METERS} m de la plaza para registrar tu visita. Distancia actual: ${distance} m.`
+      )
+      return
+    }
+
+    const { error } = await supabase.from('plaza_checkins').insert({
+      user_id: session.user.id,
+      plaza_id: plaza.id,
+      points: 10,
+    })
+
+    if (error) {
+      if (error.code === '23505') {
+        setCheckedInToday(true)
+        Alert.alert('Ya registrado', 'Ya registraste una visita en esta plaza hoy.')
+        return
       }
 
-      setCheckedInToday(true)
-      Alert.alert('Visita registrada', 'Ganaste 10 puntos.')
-    } catch (error: any) {
-      Alert.alert('Error', error.message ?? 'No se pudo registrar la visita.')
-    } finally {
-      setRegistering(false)
+      throw error
     }
+
+    setCheckedInToday(true)
+    Alert.alert('Visita registrada', `Ganaste 10 puntos. Distancia: ${distance} m.`)
+  } catch (error: any) {
+    Alert.alert('Error', error.message ?? 'No se pudo registrar la visita.')
+  } finally {
+    setRegistering(false)
   }
+}
+
+
 
   async function checkFavoriteStatus() {
   if (!session?.user?.id || !id) return
@@ -315,6 +370,16 @@ async function handleToggleFavorite() {
         </Text>
       </Pressable>
 
+      <Text style={styles.checkinHelpText}>
+        Necesitas estar cerca de esta plaza para registrar la visita.
+      </Text>
+
+      {distanceToPlaza !== null && (
+        <Text style={styles.distanceText}>
+          Distancia detectada: {distanceToPlaza} m
+        </Text>
+      )}
+
       {galleryImages.length > 0 && (
         <View style={styles.card}>
           <Text style={styles.label}>Galería</Text>
@@ -342,7 +407,16 @@ async function handleToggleFavorite() {
           <Text style={styles.emptyText}>No hay máquinas registradas todavía.</Text>
         ) : (
           machines.map((machine) => (
-            <View key={machine.id} style={styles.machineItem}>
+            <Pressable
+              key={machine.id}
+              style={styles.machineItem}
+              onPress={() =>
+                router.push({
+                  pathname: '/maquina/[id]',
+                  params: { id: String(machine.machineTypeId) },
+                })
+              }
+            >
               <View style={{ flex: 1 }}>
                 <Text style={styles.machineName}>{machine.name}</Text>
 
@@ -355,10 +429,12 @@ async function handleToggleFavorite() {
                 ) : null}
               </View>
 
-              <View style={styles.quantityBadge}>
-                <Text style={styles.quantityText}>x{machine.quantity}</Text>
+              <View style={styles.machineRight}>
+                <View style={styles.quantityBadge}>
+                  <Text style={styles.quantityText}>x{machine.quantity}</Text>
+                </View>
               </View>
-            </View>
+            </Pressable>
           ))
         )}
       </View>
@@ -530,5 +606,22 @@ const styles = StyleSheet.create({
   },
   favoriteButtonTextActive: {
     color: '#fff',
+  },
+  checkinHelpText: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginTop: -4,
+  },
+  distanceText: {
+    fontSize: 14,
+    color: '#166534',
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  machineRight: {
+    marginLeft: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 })

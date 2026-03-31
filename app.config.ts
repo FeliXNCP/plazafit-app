@@ -12,6 +12,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
 
   ios: {
     icon: './assets/expo.icon',
+    infoPlist: {
+      NSLocationWhenInUseUsageDescription:
+        'PlazaFit necesita tu ubicación para validar que estás cerca de la plaza al registrar una visita.',
+    },
   },
 
   android: {
@@ -23,6 +27,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       monochromeImage: './assets/images/android-icon-monochrome.png',
     },
     predictiveBackGestureEnabled: false,
+    permissions: ['ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION'],
   },
 
   web: {
@@ -48,6 +53,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         androidGoogleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
       },
     ],
+    'expo-location',
   ],
 
   experiments: {
