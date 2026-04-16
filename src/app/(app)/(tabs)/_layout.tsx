@@ -31,6 +31,15 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="scan"
+        options={{
+          title: 'QR',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="qr-code-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Perfil',

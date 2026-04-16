@@ -18,6 +18,7 @@
     "@react-navigation/native": "^7.1.33",
     "@supabase/supabase-js": "^2.100.1",
     "expo": "~55.0.9",
+    "expo-camera": "~55.0.15",
     "expo-constants": "~55.0.9",
     "expo-device": "~55.0.10",
     "expo-font": "~55.0.4",

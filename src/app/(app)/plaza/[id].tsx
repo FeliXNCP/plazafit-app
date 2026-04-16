@@ -485,7 +485,10 @@ async function handleToggleFavorite() {
               onPress={() =>
                 router.push({
                   pathname: '/maquina/[id]',
-                  params: { id: String(machine.machineTypeId) },
+                  params: { 
+                    id: String(machine.machineTypeId),
+                    plazaId: String(plaza.id),
+                   },
                 })
               }
             >

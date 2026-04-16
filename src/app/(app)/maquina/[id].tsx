@@ -1,13 +1,14 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { useLocalSearchParams } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import {
-    ActivityIndicator,
-    Image,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native'
 import { supabase } from '../../../lib/supabase'
 import type { Database } from '../../../types/database.types'
@@ -15,27 +16,34 @@ import type { Database } from '../../../types/database.types'
 type MachineType = Database['public']['Tables']['machine_types']['Row']
 type MachineImage = Database['public']['Tables']['machine_type_images']['Row']
 type MachineTip = Database['public']['Tables']['machine_type_tips']['Row']
+type PlazaRoutine = Database['public']['Tables']['plaza_routines']['Row']
+
+type RoutineStepLink = {
+  routine_id: number
+}
 
 export default function MachineDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
+  const { id, plazaId } = useLocalSearchParams<{ id: string; plazaId?: string }>()
 
   const [machine, setMachine] = useState<MachineType | null>(null)
   const [images, setImages] = useState<MachineImage[]>([])
   const [tips, setTips] = useState<MachineTip[]>([])
+  const [relatedRoutines, setRelatedRoutines] = useState<PlazaRoutine[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!id) return
     fetchMachineData()
-  }, [id])
+  }, [id, plazaId])
 
   async function fetchMachineData() {
     try {
       setLoading(true)
 
       const machineId = Number(id)
+      const selectedPlazaId = plazaId ? Number(plazaId) : null
 
-      const [machineRes, imagesRes, tipsRes] = await Promise.all([
+      const [machineRes, imagesRes, tipsRes, routineLinksRes] = await Promise.all([
         supabase.from('machine_types').select('*').eq('id', machineId).single(),
         supabase
           .from('machine_type_images')
@@ -47,15 +55,46 @@ export default function MachineDetailScreen() {
           .select('*')
           .eq('machine_type_id', machineId)
           .order('sort_order', { ascending: true }),
+        supabase
+          .from('plaza_routine_steps')
+          .select('routine_id')
+          .eq('machine_type_id', machineId),
       ])
 
       if (machineRes.error) throw machineRes.error
       if (imagesRes.error) throw imagesRes.error
       if (tipsRes.error) throw tipsRes.error
+      if (routineLinksRes.error) throw routineLinksRes.error
 
       setMachine(machineRes.data ?? null)
       setImages(imagesRes.data ?? [])
       setTips(tipsRes.data ?? [])
+
+      const routineIds = Array.from(
+        new Set(((routineLinksRes.data ?? []) as RoutineStepLink[]).map((item) => item.routine_id))
+      )
+
+      if (routineIds.length === 0) {
+        setRelatedRoutines([])
+        return
+      }
+
+      let routineQuery = supabase
+        .from('plaza_routines')
+        .select('*')
+        .in('id', routineIds)
+        .order('is_featured', { ascending: false })
+        .order('created_at', { ascending: true })
+
+      if (selectedPlazaId) {
+        routineQuery = routineQuery.eq('plaza_id', selectedPlazaId)
+      }
+
+      const { data: routinesData, error: routinesError } = await routineQuery
+
+      if (routinesError) throw routinesError
+
+      setRelatedRoutines((routinesData ?? []) as PlazaRoutine[])
     } finally {
       setLoading(false)
     }
@@ -112,10 +151,10 @@ export default function MachineDetailScreen() {
 
       {machine.category ? (
         <View style={styles.categoryBadge}>
-            <Ionicons name="barbell-outline" size={14} color="#166534" />
-            <Text style={styles.categoryBadgeText}>{machine.category}</Text>
+          <Ionicons name="barbell-outline" size={14} color="#166534" />
+          <Text style={styles.categoryBadgeText}>{machine.category}</Text>
         </View>
-        ) : null}
+      ) : null}
 
       <View style={styles.card}>
         <Text style={styles.label}>Descripción</Text>
@@ -146,44 +185,98 @@ export default function MachineDetailScreen() {
 
       <View style={styles.tipCardSuccess}>
         <View style={styles.tipHeaderRow}>
-            <View style={styles.tipIconSuccess}>
+          <View style={styles.tipIconSuccess}>
             <Ionicons name="checkmark-circle" size={18} color="#166534" />
-            </View>
-            <Text style={styles.tipTitleSuccess}>Cómo usarla</Text>
+          </View>
+          <Text style={styles.tipTitleSuccess}>Cómo usarla</Text>
         </View>
 
         {recommendTips.length === 0 ? (
-            <Text style={styles.emptyTextSuccess}>No hay recomendaciones todavía.</Text>
+          <Text style={styles.emptyTextSuccess}>No hay recomendaciones todavía.</Text>
         ) : (
-            recommendTips.map((tip) => (
+          recommendTips.map((tip) => (
             <View key={tip.id} style={styles.tipItem}>
-                <Text style={styles.bulletSuccess}>•</Text>
-                <Text style={styles.tipTextDark}>{tip.content}</Text>
+              <Text style={styles.bulletSuccess}>•</Text>
+              <Text style={styles.tipTextDark}>{tip.content}</Text>
             </View>
-            ))
+          ))
         )}
-        </View>
+      </View>
 
-        <View style={styles.tipCardDanger}>
+      <View style={styles.tipCardDanger}>
         <View style={styles.tipHeaderRow}>
-            <View style={styles.tipIconDanger}>
+          <View style={styles.tipIconDanger}>
             <Ionicons name="alert-circle" size={18} color="#991b1b" />
-            </View>
-            <Text style={styles.tipTitleDanger}>Evita</Text>
+          </View>
+          <Text style={styles.tipTitleDanger}>Evita</Text>
         </View>
 
         {avoidTips.length === 0 ? (
-            <Text style={styles.emptyTextDanger}>No hay advertencias todavía.</Text>
+          <Text style={styles.emptyTextDanger}>No hay advertencias todavía.</Text>
         ) : (
-            avoidTips.map((tip) => (
+          avoidTips.map((tip) => (
             <View key={tip.id} style={styles.tipItem}>
-                <Text style={styles.bulletDanger}>•</Text>
-                <Text style={styles.tipTextDark}>{tip.content}</Text>
+              <Text style={styles.bulletDanger}>•</Text>
+              <Text style={styles.tipTextDark}>{tip.content}</Text>
             </View>
-            ))
+          ))
         )}
-        </View>
+      </View>
 
+      <View style={styles.card}>
+        <Text style={styles.label}>
+          {plazaId ? 'Rutinas disponibles en esta plaza' : 'Rutinas donde se usa esta máquina'}
+        </Text>
+
+        {relatedRoutines.length === 0 ? (
+          <Text style={styles.emptyText}>No hay rutinas relacionadas todavía.</Text>
+        ) : (
+          relatedRoutines.map((routine) => (
+            <Pressable
+              key={routine.id}
+              style={styles.routineCard}
+              onPress={() =>
+                router.push({
+                  pathname: '/rutina/[id]',
+                  params: { id: String(routine.id) },
+                })
+              }
+            >
+              <View style={{ flex: 1 }}>
+                <View style={styles.routineHeaderRow}>
+                  <Text style={styles.routineTitle}>{routine.title}</Text>
+
+                  {routine.is_featured ? (
+                    <View style={styles.featuredBadge}>
+                      <Text style={styles.featuredBadgeText}>Destacada</Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                {routine.description ? (
+                  <Text style={styles.routineDescription}>{routine.description}</Text>
+                ) : null}
+
+                <View style={styles.routineMetaRow}>
+                  {routine.goal ? (
+                    <Text style={styles.routineMeta}>{routine.goal}</Text>
+                  ) : null}
+
+                  {routine.difficulty ? (
+                    <Text style={styles.routineMeta}>{routine.difficulty}</Text>
+                  ) : null}
+
+                  {routine.estimated_minutes ? (
+                    <Text style={styles.routineMeta}>
+                      {routine.estimated_minutes} min
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+            </Pressable>
+          ))
+        )}
+      </View>
     </ScrollView>
   )
 }
@@ -235,10 +328,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111827',
   },
-  subtitle: {
-    fontSize: 16,
-    color: '#15803d',
-    marginTop: -6,
+  categoryBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginTop: -4,
+  },
+  categoryBadgeText: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '700',
   },
   card: {
     backgroundColor: '#ffffff',
@@ -271,12 +377,6 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 15,
     color: '#6b7280',
-  },
-  tipItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    paddingVertical: 6,
   },
   tipCardSuccess: {
     backgroundColor: '#dcfce7',
@@ -324,6 +424,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#991b1b',
   },
+  tipItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingVertical: 6,
+  },
   bulletSuccess: {
     fontSize: 18,
     color: '#16a34a',
@@ -348,23 +454,52 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#991b1b',
   },
-  categoryBadge: {
-    alignSelf: 'flex-start',
+  routineCard: {
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#ecfdf5',
+  },
+  routineHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#dcfce7',
-    borderWidth: 1,
-    borderColor: '#86efac',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    marginTop: -4,
+    justifyContent: 'space-between',
+    gap: 10,
   },
-  categoryBadgeText: {
+  routineTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  routineDescription: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginTop: 6,
+    lineHeight: 20,
+  },
+  routineMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  routineMeta: {
+    fontSize: 12,
     color: '#166534',
-    fontSize: 13,
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  featuredBadge: {
+    backgroundColor: '#16a34a',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  featuredBadgeText: {
+    color: '#fff',
+    fontSize: 11,
     fontWeight: '700',
   },
-  
 })

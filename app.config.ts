@@ -54,6 +54,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       },
     ],
     'expo-location',
+    [
+      'expo-camera',
+      {
+        cameraPermission: 'PlazaFit necesita acceso a la cámara para escanear códigos QR de máquinas.',
+      },
+    ],
   ],
 
   experiments: {

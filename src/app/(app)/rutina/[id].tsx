@@ -12,6 +12,7 @@ import { supabase } from '../../../lib/supabase'
 
 type Routine = {
   id: number
+  plaza_id: number
   title: string
   description: string | null
   goal: string | null
@@ -200,7 +201,10 @@ export default function RoutineDetailScreen() {
                     onPress={() =>
                       router.push({
                         pathname: '/maquina/[id]',
-                        params: { id: String(step.machineTypeId) },
+                        params: { 
+                            id: String(step.machineTypeId),
+                            plazaId: String(routine.plaza_id),
+                         },
                       })
                     }
                   >
