@@ -45,6 +45,16 @@ type NormalizedMachine = {
   category: string | null
 }
 
+type PlazaRoutine = {
+  id: number
+  title: string
+  description: string | null
+  goal: string | null
+  difficulty: string | null
+  estimated_minutes: number | null
+  is_featured: boolean
+}
+
 export default function PlazaDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const { session } = useSession()
@@ -58,6 +68,7 @@ export default function PlazaDetailScreen() {
   const [isFavorite, setIsFavorite] = useState(false)
   const [favoriteLoading, setFavoriteLoading] = useState(false)
   const [distanceToPlaza, setDistanceToPlaza] = useState<number | null>(null)
+  const [routines, setRoutines] = useState<PlazaRoutine[]>([])
 
   useEffect(() => {
     if (!id) return
@@ -80,7 +91,7 @@ export default function PlazaDetailScreen() {
 
       const plazaId = Number(id)
 
-      const [plazaRes, imagesRes, machinesRes] = await Promise.all([
+      const [plazaRes, imagesRes, machinesRes, routinesRes] = await Promise.all([
         supabase.from('plazas').select('*').eq('id', plazaId).single(),
         supabase
           .from('plaza_images')
@@ -102,14 +113,22 @@ export default function PlazaDetailScreen() {
           `
           )
           .eq('plaza_id', plazaId),
+        supabase
+          .from('plaza_routines')
+          .select('*')
+          .eq('plaza_id', plazaId)
+          .order('is_featured', { ascending: false })
+          .order('created_at', { ascending: true }),
       ])
 
       if (plazaRes.error) throw plazaRes.error
       if (imagesRes.error) throw imagesRes.error
       if (machinesRes.error) throw machinesRes.error
+      if (routinesRes.error) throw routinesRes.error
 
       setPlaza(plazaRes.data ?? null)
       setImages(imagesRes.data ?? [])
+      setRoutines((routinesRes.data ?? []) as PlazaRoutine[])
 
       const normalizedMachines = ((machinesRes.data ?? []) as any[]).map((item) => {
         const machineType = Array.isArray(item.machine_types)
@@ -401,6 +420,59 @@ async function handleToggleFavorite() {
       )}
 
       <View style={styles.card}>
+        <Text style={styles.label}>Rutinas disponibles</Text>
+
+        {routines.length === 0 ? (
+          <Text style={styles.emptyText}>No hay rutinas registradas todavía.</Text>
+        ) : (
+          routines.map((routine) => (
+            <Pressable
+              key={routine.id}
+              style={styles.routineCard}
+              onPress={() =>
+                router.push({
+                  pathname: '/rutina/[id]',
+                  params: { id: String(routine.id) },
+                })
+              }
+            >
+              <View style={{ flex: 1 }}>
+                <View style={styles.routineHeaderRow}>
+                  <Text style={styles.routineTitle}>{routine.title}</Text>
+
+                  {routine.is_featured ? (
+                    <View style={styles.featuredBadge}>
+                      <Text style={styles.featuredBadgeText}>Destacada</Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                {routine.description ? (
+                  <Text style={styles.routineDescription}>{routine.description}</Text>
+                ) : null}
+
+                <View style={styles.routineMetaRow}>
+                  {routine.goal ? (
+                    <Text style={styles.routineMeta}>{routine.goal}</Text>
+                  ) : null}
+
+                  {routine.difficulty ? (
+                    <Text style={styles.routineMeta}>{routine.difficulty}</Text>
+                  ) : null}
+
+                  {routine.estimated_minutes ? (
+                    <Text style={styles.routineMeta}>{routine.estimated_minutes} min</Text>
+                  ) : null}
+                </View>
+              </View>
+            </Pressable>
+          ))
+        )}
+      </View>
+
+
+
+      <View style={styles.card}>
         <Text style={styles.label}>Máquinas disponibles</Text>
 
         {machines.length === 0 ? (
@@ -623,5 +695,53 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  routineCard: {
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#ecfdf5',
+  },
+  routineHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  routineTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  routineDescription: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginTop: 6,
+    lineHeight: 20,
+  },
+  routineMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  routineMeta: {
+    fontSize: 12,
+    color: '#166534',
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  featuredBadge: {
+    backgroundColor: '#16a34a',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  featuredBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
   },
 })
