@@ -1,12 +1,12 @@
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useState } from 'react'
 import {
-    ActivityIndicator,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native'
 import { supabase } from '../../../lib/supabase'
 
@@ -204,6 +204,7 @@ export default function RoutineDetailScreen() {
                         params: { 
                             id: String(step.machineTypeId),
                             plazaId: String(routine.plaza_id),
+                            origin: 'map',
                          },
                       })
                     }

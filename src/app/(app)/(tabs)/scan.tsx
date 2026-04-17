@@ -3,12 +3,12 @@ import { CameraView, useCameraPermissions } from 'expo-camera'
 import { router } from 'expo-router'
 import { useState } from 'react'
 import {
-    ActivityIndicator,
-    Alert,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native'
 import { supabase } from '../../../lib/supabase'
 
@@ -55,6 +55,8 @@ export default function ScanScreen() {
         params: {
           id: String(plazaMachine.machine_type_id),
           plazaId: String(plazaMachine.plaza_id),
+          plazaMachineId: String(plazaMachine.id),
+          origin: 'qr',
         },
       })
     } catch (error: any) {

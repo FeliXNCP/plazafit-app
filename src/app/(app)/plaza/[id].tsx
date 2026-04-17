@@ -488,6 +488,8 @@ async function handleToggleFavorite() {
                   params: { 
                     id: String(machine.machineTypeId),
                     plazaId: String(plaza.id),
+                    plazaMachineId: String(machine.id),
+                    origin: 'map',
                    },
                 })
               }

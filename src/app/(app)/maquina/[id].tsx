@@ -23,13 +23,20 @@ type RoutineStepLink = {
 }
 
 export default function MachineDetailScreen() {
-  const { id, plazaId } = useLocalSearchParams<{ id: string; plazaId?: string }>()
+  const { id, plazaId, plazaMachineId } = useLocalSearchParams<{
+     id: string; 
+     plazaId?: string
+     plazaMachineId?: string
+     origin?: string
+    }>()
 
   const [machine, setMachine] = useState<MachineType | null>(null)
   const [images, setImages] = useState<MachineImage[]>([])
   const [tips, setTips] = useState<MachineTip[]>([])
   const [relatedRoutines, setRelatedRoutines] = useState<PlazaRoutine[]>([])
   const [loading, setLoading] = useState(true)
+  const [plazaName, setPlazaName] = useState<string | null>(null)
+  const [resolvedPlazaMachineId, setResolvedPlazaMachineId] = useState<number | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -42,6 +49,7 @@ export default function MachineDetailScreen() {
 
       const machineId = Number(id)
       const selectedPlazaId = plazaId ? Number(plazaId) : null
+      const selectedPlazaMachineId = plazaMachineId ? Number(plazaMachineId) : null
 
       const [machineRes, imagesRes, tipsRes, routineLinksRes] = await Promise.all([
         supabase.from('machine_types').select('*').eq('id', machineId).single(),
@@ -71,30 +79,62 @@ export default function MachineDetailScreen() {
       setTips(tipsRes.data ?? [])
 
       const routineIds = Array.from(
-        new Set(((routineLinksRes.data ?? []) as RoutineStepLink[]).map((item) => item.routine_id))
+        new Set(
+          ((routineLinksRes.data ?? []) as RoutineStepLink[]).map(
+            (item) => item.routine_id
+          )
+        )
       )
 
-      if (routineIds.length === 0) {
-        setRelatedRoutines([])
-        return
-      }
+      if (routineIds.length > 0) {
+        let routineQuery = supabase
+          .from('plaza_routines')
+          .select('*')
+          .in('id', routineIds)
+          .order('is_featured', { ascending: false })
+          .order('created_at', { ascending: true })
 
-      let routineQuery = supabase
-        .from('plaza_routines')
-        .select('*')
-        .in('id', routineIds)
-        .order('is_featured', { ascending: false })
-        .order('created_at', { ascending: true })
+        if (selectedPlazaId) {
+          routineQuery = routineQuery.eq('plaza_id', selectedPlazaId)
+        }
+
+        const { data: routinesData, error: routinesError } = await routineQuery
+
+        if (routinesError) throw routinesError
+
+        setRelatedRoutines((routinesData ?? []) as PlazaRoutine[])
+      } else {
+        setRelatedRoutines([])
+      }
 
       if (selectedPlazaId) {
-        routineQuery = routineQuery.eq('plaza_id', selectedPlazaId)
+        const { data: plazaData } = await supabase
+          .from('plazas')
+          .select('nombre')
+          .eq('id', selectedPlazaId)
+          .single()
+
+        setPlazaName(plazaData?.nombre ?? null)
+      } else {
+        setPlazaName(null)
       }
 
-      const { data: routinesData, error: routinesError } = await routineQuery
+      if (selectedPlazaMachineId) {
+        setResolvedPlazaMachineId(selectedPlazaMachineId)
+      } else if (selectedPlazaId) {
+        const { data: plazaMachineData } = await supabase
+          .from('plaza_machines')
+          .select('id')
+          .eq('plaza_id', selectedPlazaId)
+          .eq('machine_type_id', machineId)
+          .maybeSingle()
 
-      if (routinesError) throw routinesError
-
-      setRelatedRoutines((routinesData ?? []) as PlazaRoutine[])
+        setResolvedPlazaMachineId(plazaMachineData?.id ?? null)
+      } else {
+        setResolvedPlazaMachineId(null)
+      }
+    } catch (error: any) {
+      console.error('Error loading machine detail:', error)
     } finally {
       setLoading(false)
     }
@@ -155,6 +195,45 @@ export default function MachineDetailScreen() {
           <Text style={styles.categoryBadgeText}>{machine.category}</Text>
         </View>
       ) : null}
+
+
+      {plazaId && plazaName ? (
+        <View style={styles.contextCard}>
+          <Text style={styles.contextLabel}>Plaza</Text>
+          <Text style={styles.contextTitle}>{plazaName}</Text>
+
+          <View style={styles.contextActions}>
+            <Pressable
+              style={styles.contextButton}
+              onPress={() =>
+                router.push({
+                  pathname: '/plaza/[id]',
+                  params: { id: String(plazaId) },
+                })
+              }
+            >
+              <Text style={styles.contextButtonText}>Ver plaza</Text>
+            </Pressable>
+
+            {resolvedPlazaMachineId ? (
+              <Pressable
+                style={styles.reportButton}
+                onPress={() =>
+                  router.push({
+                    pathname: '/reporte/[id]',
+                    params: { id: String(resolvedPlazaMachineId) },
+                  })
+                }
+              >
+                <Text style={styles.reportButtonText}>Reportar problema</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
+
+
 
       <View style={styles.card}>
         <Text style={styles.label}>Descripción</Text>
@@ -500,6 +579,54 @@ const styles = StyleSheet.create({
   featuredBadgeText: {
     color: '#fff',
     fontSize: 11,
+    fontWeight: '700',
+  },
+  contextCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+  },
+  contextLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#16a34a',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  contextTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  contextActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  contextButton: {
+    flex: 1,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  contextButtonText: {
+    color: '#166534',
+    fontWeight: '700',
+  },
+  reportButton: {
+    flex: 1,
+    backgroundColor: '#dc2626',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  reportButtonText: {
+    color: '#fff',
     fontWeight: '700',
   },
 })
