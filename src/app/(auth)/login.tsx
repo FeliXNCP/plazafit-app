@@ -1,6 +1,6 @@
 import { Link } from 'expo-router'
 import { useState } from 'react'
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Alert, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { supabase } from '../../lib/supabase'
 
 export default function LoginScreen() {
@@ -26,6 +26,13 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
+
+      <Image
+        source={require('../../../assets/images/plazafit-logo.png')}
+        style={styles.logo}
+        resizeMode="contain"
+      />
+
       <Text style={styles.brand}>PlazaFit</Text>
       <Text style={styles.title}>Bienvenido</Text>
 
@@ -100,5 +107,11 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: 'center',
     color: '#15803d',
+  },
+  logo: {
+    width: 110,
+    height: 110,
+    alignSelf: 'center',
+    marginBottom: 8,
   },
 })
