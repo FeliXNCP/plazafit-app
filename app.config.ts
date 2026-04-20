@@ -40,9 +40,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       'expo-splash-screen',
       {
-        backgroundColor: '#208AEF',
+        backgroundColor: '#16a34a',
         android: {
-          image: './assets/images/splash-icon.png',
+          image: './assets/images/plazafit-logo.png',
           imageWidth: 76,
         },
       },
@@ -65,5 +65,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   experiments: {
     typedRoutes: true,
     reactCompiler: true,
+  },
+
+  extra: {
+    eas: {
+      projectId: 'af2430ac-e18b-432f-b391-11567acfae40',
+    },
   },
 })
