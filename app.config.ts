@@ -8,7 +8,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   orientation: 'portrait',
   icon: './assets/images/icon.png',
   scheme: 'plazafit',
-  userInterfaceStyle: 'automatic',
+  userInterfaceStyle: 'light',
 
   ios: {
     icon: './assets/expo.icon',

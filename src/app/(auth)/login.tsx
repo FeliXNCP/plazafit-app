@@ -1,6 +1,17 @@
 import { Link } from 'expo-router'
 import { useState } from 'react'
-import { Alert, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import {
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native'
 import { supabase } from '../../lib/supabase'
 
 export default function LoginScreen() {
@@ -11,6 +22,7 @@ export default function LoginScreen() {
   async function handleLogin() {
     try {
       setLoading(true)
+
       const { error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
@@ -25,54 +37,76 @@ export default function LoginScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.container}>
+          <Image
+            source={require('../../../assets/images/plazafit-logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
 
-      <Image
-        source={require('../../../assets/images/plazafit-logo.png')}
-        style={styles.logo}
-        resizeMode="contain"
-      />
+          <Text style={styles.brand}>PlazaFit</Text>
+          <Text style={styles.title}>Bienvenido</Text>
 
-      <Text style={styles.brand}>PlazaFit</Text>
-      <Text style={styles.title}>Bienvenido</Text>
+          <TextInput
+            placeholder="Correo"
+            autoCapitalize="none"
+            keyboardType="email-address"
+            style={styles.input}
+            value={email}
+            onChangeText={setEmail}
+            placeholderTextColor="#6b7280"
+          />
 
-      <TextInput
-        placeholder="Correo"
-        autoCapitalize="none"
-        keyboardType="email-address"
-        style={styles.input}
-        value={email}
-        onChangeText={setEmail}
-        placeholderTextColor="#6b7280"
-      />
+          <TextInput
+            placeholder="Contraseña"
+            secureTextEntry
+            style={styles.input}
+            value={password}
+            onChangeText={setPassword}
+            placeholderTextColor="#6b7280"
+          />
 
-      <TextInput
-        placeholder="Contraseña"
-        secureTextEntry
-        style={styles.input}
-        value={password}
-        onChangeText={setPassword}
-        placeholderTextColor="#6b7280"
-      />
+          <Pressable style={styles.button} onPress={handleLogin} disabled={loading}>
+            <Text style={styles.buttonText}>
+              {loading ? 'Entrando...' : 'Iniciar sesión'}
+            </Text>
+          </Pressable>
 
-      <Pressable style={styles.button} onPress={handleLogin} disabled={loading}>
-        <Text style={styles.buttonText}>{loading ? 'Entrando...' : 'Iniciar sesión'}</Text>
-      </Pressable>
-
-      <Link href="/register" style={styles.link}>
-        ¿No tienes cuenta? Regístrate
-      </Link>
-    </View>
+          <Link href="/register" style={styles.link}>
+            ¿No tienes cuenta? Regístrate
+          </Link>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
+  flex: {
     flex: 1,
+    backgroundColor: '#f0fdf4',
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     padding: 24,
+  },
+  container: {
     gap: 12,
-    backgroundColor: '#f0fdf4',
+  },
+  logo: {
+    width: 110,
+    height: 110,
+    alignSelf: 'center',
+    marginBottom: 8,
   },
   brand: {
     fontSize: 32,
@@ -102,16 +136,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
-  buttonText: { color: 'white', fontWeight: '700' },
+  buttonText: {
+    color: 'white',
+    fontWeight: '700',
+  },
   link: {
     marginTop: 8,
     textAlign: 'center',
     color: '#15803d',
-  },
-  logo: {
-    width: 110,
-    height: 110,
-    alignSelf: 'center',
-    marginBottom: 8,
   },
 })
