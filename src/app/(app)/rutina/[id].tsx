@@ -1,7 +1,8 @@
-import { router, useLocalSearchParams } from 'expo-router'
-import { useEffect, useState } from 'react'
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
+import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,7 +10,9 @@ import {
   View,
 } from 'react-native'
 import { supabase } from '../../../lib/supabase'
+import type { Database } from '../../../types/database.types'
 
+//tipos
 type Routine = {
   id: number
   plaza_id: number
@@ -59,18 +62,51 @@ type RoutineStep = {
   machineCategory: string | null
 }
 
+type ActiveWorkout = Pick<
+  Database['public']['Tables']['workout_sessions']['Row'],
+  'id' | 'routine_id' | 'routine_title_snapshot' | 'started_at'
+>
+
+
+// estados
 export default function RoutineDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
 
   const [routine, setRoutine] = useState<Routine | null>(null)
   const [steps, setSteps] = useState<RoutineStep[]>([])
   const [loading, setLoading] = useState(true)
+  const [activeWorkout, setActiveWorkout] = useState<ActiveWorkout | null>(null)
+  const [startingWorkout, setStartingWorkout] = useState(false)
+
+  const fetchActiveWorkout = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('workout_sessions')
+      .select('id, routine_id, routine_title_snapshot, started_at')
+      .eq('status', 'in_progress')
+      .maybeSingle()
+
+    if (error) {
+      console.error('Error loading active workout:', error)
+      return
+    }
+
+    setActiveWorkout((data ?? null) as ActiveWorkout | null)
+  }, [])
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchActiveWorkout()
+    }, [fetchActiveWorkout])
+  )
+
 
   useEffect(() => {
     if (!id) return
     fetchRoutineData()
   }, [id])
 
+
+  //funciones
   async function fetchRoutineData() {
     try {
       setLoading(true)
@@ -160,6 +196,67 @@ export default function RoutineDetailScreen() {
     )
   }
 
+  async function handleWorkoutAction() {
+  if (!id) return
+
+  if (activeWorkout) {
+    router.push({
+      pathname: '/entrenamiento/[id]',
+      params: { id: activeWorkout.id },
+    })
+    return
+  }
+
+  try {
+    setStartingWorkout(true)
+
+    const { data: sessionId, error } = await supabase.rpc(
+      'start_workout_session',
+      {
+        p_routine_id: Number(id),
+      }
+    )
+
+    if (error) {
+      if (error.message.includes('ACTIVE_WORKOUT_EXISTS')) {
+        await fetchActiveWorkout()
+
+        Alert.alert(
+          'Entrenamiento activo',
+          'Ya tienes un entrenamiento en curso. Puedes continuarlo antes de comenzar otro.'
+        )
+        return
+      }
+
+      if (error.message.includes('ROUTINE_HAS_NO_STEPS')) {
+        Alert.alert(
+          'Rutina incompleta',
+          'Esta rutina todavía no tiene pasos configurados.'
+        )
+        return
+      }
+
+      throw error
+    }
+
+    if (!sessionId) {
+      throw new Error('No se recibió el identificador de la sesión.')
+    }
+
+    router.push({
+      pathname: '/entrenamiento/[id]',
+      params: { id: String(sessionId) },
+    })
+  } catch (error: any) {
+    Alert.alert(
+      'No se pudo iniciar',
+      error.message ?? 'No se pudo iniciar el entrenamiento.'
+    )
+  } finally {
+    setStartingWorkout(false)
+  }
+}
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
       <View style={styles.heroCard}>
@@ -179,6 +276,53 @@ export default function RoutineDetailScreen() {
           ) : null}
         </View>
       </View>
+
+
+      {activeWorkout ? (
+        <View style={styles.activeWorkoutCard}>
+          <Text style={styles.activeWorkoutEyebrow}>Entrenamiento en curso</Text>
+
+          <Text style={styles.activeWorkoutTitle}>
+            {activeWorkout.routine_id === routine.id
+              ? 'Ya comenzaste esta rutina'
+              : activeWorkout.routine_title_snapshot}
+          </Text>
+
+          <Text style={styles.activeWorkoutText}>
+            {activeWorkout.routine_id === routine.id
+              ? 'Puedes continuar desde el paso en que quedaste.'
+              : 'Debes terminar o abandonar la sesión activa antes de comenzar otra.'}
+          </Text>
+
+          <Pressable
+            style={styles.continueWorkoutButton}
+            onPress={handleWorkoutAction}
+          >
+            <Text style={styles.continueWorkoutButtonText}>
+              Continuar entrenamiento
+            </Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable
+          style={[
+            styles.startWorkoutButton,
+            startingWorkout && styles.buttonDisabled,
+          ]}
+          onPress={handleWorkoutAction}
+          disabled={startingWorkout}
+        >
+          <Text style={styles.startWorkoutButtonText}>
+            {startingWorkout
+              ? 'Iniciando entrenamiento...'
+              : 'Comenzar entrenamiento'}
+          </Text>
+        </Pressable>
+      )}
+
+
+
+
 
       <View style={styles.card}>
         <Text style={styles.label}>Pasos de la rutina</Text>
@@ -231,6 +375,7 @@ export default function RoutineDetailScreen() {
     </ScrollView>
   )
 }
+
 
 const styles = StyleSheet.create({
   screen: {
@@ -345,5 +490,55 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#6b7280',
     marginTop: 8,
+  },
+  activeWorkoutCard: {
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 18,
+    padding: 18,
+  },
+  activeWorkoutEyebrow: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#92400e',
+    textTransform: 'uppercase',
+  },
+  activeWorkoutTitle: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#111827',
+    marginTop: 6,
+  },
+  activeWorkoutText: {
+    fontSize: 14,
+    color: '#4b5563',
+    lineHeight: 20,
+    marginTop: 6,
+  },
+  continueWorkoutButton: {
+    backgroundColor: '#d97706',
+    borderRadius: 13,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 14,
+  },
+  continueWorkoutButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+  },
+  startWorkoutButton: {
+    backgroundColor: '#16a34a',
+    borderRadius: 16,
+    paddingVertical: 17,
+    alignItems: 'center',
+  },
+  startWorkoutButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  buttonDisabled: {
+    opacity: 0.65,
   },
 })
