@@ -2,13 +2,13 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-    ActivityIndicator,
-    Alert,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../../../lib/supabase'
@@ -26,6 +26,14 @@ type WorkoutSession = Pick<
   | 'started_at'
   | 'completed_at'
   | 'abandoned_at'
+  | 'total_steps'
+  | 'completed_steps'
+  | 'skipped_steps'
+  | 'completion_percentage'
+  | 'reward_eligible'
+  | 'reward_reason'
+  | 'workout_duration_seconds'
+  | 'xp_awarded'
 >
 
 type WorkoutStep =
@@ -81,8 +89,16 @@ export default function WorkoutScreen() {
             current_step_order,
             started_at,
             completed_at,
-            abandoned_at
-          `
+            abandoned_at,
+            total_steps,
+            completed_steps,
+            skipped_steps,
+            completion_percentage,
+            reward_eligible,
+            reward_reason,
+            workout_duration_seconds,
+            xp_awarded
+        `
           )
           .eq('id', id)
           .single(),
@@ -171,6 +187,28 @@ export default function WorkoutScreen() {
         )
       : 0
 
+
+
+    const minimumCompletionSeconds =
+        activeStep?.minimum_completion_seconds ?? 0
+
+    const completionUnlockRemainingSeconds =
+        activeStep
+            ? Math.max(
+                minimumCompletionSeconds -
+                activeElapsedSeconds,
+                0
+            )
+            : 0
+
+    const canCompleteActiveStep =
+        activeStep !== null &&
+        (
+            minimumCompletionSeconds === 0 ||
+            completionUnlockRemainingSeconds === 0
+        )
+
+
   const activeRemainingSeconds =
     activeStep?.target_duration_seconds != null
       ? Math.max(
@@ -245,6 +283,20 @@ export default function WorkoutScreen() {
   ) {
     if (!session || !activeStep || processing) return
 
+    if (
+        result === 'completed' &&
+        !canCompleteActiveStep
+    ) {
+        Alert.alert(
+            'Tiempo mínimo pendiente',
+            `Podrás completar este ejercicio en ${formatLongDuration(
+                completionUnlockRemainingSeconds
+            )}. También puedes saltarlo.`
+        )
+        return
+    }
+
+
     try {
       setProcessing(true)
 
@@ -258,10 +310,21 @@ export default function WorkoutScreen() {
 
       await fetchWorkout()
     } catch (error: any) {
-      Alert.alert(
-        'No se pudo guardar',
-        error.message ?? 'No se pudo actualizar el ejercicio.'
-      )
+        
+        if (
+            error.message?.includes(
+                'STEP_MINIMUM_TIME_NOT_REACHED'
+            )
+        ) {
+            Alert.alert(
+                'Tiempo mínimo pendiente',
+                `Aún debes esperar ${formatLongDuration(
+                    completionUnlockRemainingSeconds
+                )} antes de completar este paso.`
+            )
+            return
+        }
+
     } finally {
       setProcessing(false)
     }
@@ -474,18 +537,58 @@ export default function WorkoutScreen() {
             </View>
           </View>
 
-          <View style={styles.summaryMessage}>
-            <Ionicons
-              name="sparkles-outline"
-              size={22}
-              color="#166534"
-            />
-            <Text style={styles.summaryMessageText}>
-              Esta sesión ya quedó registrada en tu historial.
-              Más adelante alimentará tu XP, racha y objetivos
-              semanales.
-            </Text>
-          </View>
+
+            {session.reward_eligible ? (
+                <View style={styles.rewardCard}>
+                    <View style={styles.rewardIcon}>
+                        <Ionicons
+                            name="sparkles"
+                            size={24}
+                            color="#ffffff"
+                        />
+                    </View>
+
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.rewardTitle}>
+                            +{session.xp_awarded} XP
+                        </Text>
+
+                        <Text style={styles.rewardText}>
+                            Completaste{' '}
+                            {session.completed_steps} de{' '}
+                            {session.total_steps} pasos y alcanzaste{' '}
+                            {Math.round(
+                                Number(
+                                    session.completion_percentage ?? 0
+                                )
+                            )}
+                            % de la rutina.
+                        </Text>
+                    </View>
+                </View>
+            ) : (
+                <View style={styles.noRewardCard}>
+                    <Ionicons
+                        name="information-circle-outline"
+                        size={24}
+                        color="#92400e"
+                    />
+
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.noRewardTitle}>
+                            Sesión guardada sin XP
+                        </Text>
+
+                        <Text style={styles.noRewardText}>
+                            Completaste{' '}
+                            {session.completed_steps} de{' '}
+                            {session.total_steps} pasos. Necesitas
+                            completar al menos el 75 % para recibir
+                            la recompensa.
+                        </Text>
+                    </View>
+                </View>
+            )}
 
           <Pressable
             style={styles.primaryAction}
@@ -632,6 +735,7 @@ export default function WorkoutScreen() {
                   Tiempo objetivo cumplido
                 </Text>
               ) : null}
+
             </View>
 
             {activeStep.machine_type_id ? (
@@ -653,25 +757,41 @@ export default function WorkoutScreen() {
             ) : null}
 
             <Pressable
-              style={[
-                styles.completeButton,
-                processing && styles.buttonDisabled,
-              ]}
-              onPress={() =>
-                void finishActiveStep('completed')
-              }
-              disabled={processing}
+                style={[
+                    styles.completeButton,
+                    (
+                        processing ||
+                        !canCompleteActiveStep
+                    ) &&
+                    styles.completeButtonLocked,
+                ]}
+                onPress={() =>
+                    void finishActiveStep('completed')
+                }
+                disabled={
+                    processing ||
+                    !canCompleteActiveStep
+                }
             >
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={21}
-                color="#ffffff"
-              />
-              <Text style={styles.completeButtonText}>
-                {processing
-                  ? 'Guardando...'
-                  : 'Completar paso'}
-              </Text>
+                <Ionicons
+                    name={
+                        canCompleteActiveStep
+                            ? 'checkmark-circle-outline'
+                            : 'lock-closed-outline'
+                    }
+                    size={21}
+                    color="#ffffff"
+                />
+
+                <Text style={styles.completeButtonText}>
+                    {processing
+                        ? 'Guardando...'
+                        : canCompleteActiveStep
+                            ? 'Completar paso'
+                            : `Disponible en ${formatClock(
+                                completionUnlockRemainingSeconds
+                            )}`}
+                </Text>
             </Pressable>
 
             <Pressable
@@ -1152,4 +1272,85 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontSize: 14,
   },
+    minimumTimeMessage: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 7,
+        backgroundColor: '#fef3c7',
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        marginTop: 12,
+    },
+    minimumTimeText: {
+        flex: 1,
+        color: '#92400e',
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    minimumTimeTextReady: {
+        color: '#166534',
+    },
+    completeButtonLocked: {
+        backgroundColor: '#9ca3af',
+    },
+    rewardCard: {
+  width: '100%',
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 12,
+  backgroundColor: '#dcfce7',
+  borderWidth: 1,
+  borderColor: '#86efac',
+  borderRadius: 16,
+  padding: 16,
+  marginTop: 18,
+},
+rewardIcon: {
+  width: 46,
+  height: 46,
+  borderRadius: 23,
+  backgroundColor: '#16a34a',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+rewardTitle: {
+  color: '#166534',
+  fontSize: 22,
+  fontWeight: '900',
+},
+rewardText: {
+  color: '#166534',
+  lineHeight: 20,
+  fontSize: 14,
+  marginTop: 3,
+},
+noRewardCard: {
+  width: '100%',
+  flexDirection: 'row',
+  alignItems: 'flex-start',
+  gap: 10,
+  backgroundColor: '#fef3c7',
+  borderWidth: 1,
+  borderColor: '#fcd34d',
+  borderRadius: 16,
+  padding: 16,
+  marginTop: 18,
+},
+noRewardTitle: {
+  color: '#92400e',
+  fontSize: 16,
+  fontWeight: '800',
+},
+noRewardText: {
+  color: '#92400e',
+  lineHeight: 20,
+  fontSize: 14,
+  marginTop: 3,
+},
+    
+
 })
