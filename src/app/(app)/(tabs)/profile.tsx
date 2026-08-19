@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { useFocusEffect } from 'expo-router'
+import { router, useFocusEffect } from 'expo-router'
 import {
   useCallback,
   useMemo,
@@ -101,6 +101,26 @@ type GamificationSummary = {
   timezone: string  
 }
 
+type NewlyUnlockedAchievement = {
+  id: number
+  code: string
+  name: string
+  description: string
+  xp_reward: number
+  icon_name: string
+  unlocked_at: string
+}
+
+type AchievementEvaluationResult = {
+  summary: {
+    total: number
+    unlocked: number
+  }
+
+  newly_unlocked:
+    NewlyUnlockedAchievement[]
+}
+
 const EMPTY_GAMIFICATION: GamificationSummary = {
   totalXp: 0,
   currentLevel: 1,
@@ -129,6 +149,17 @@ const EMPTY_GAMIFICATION: GamificationSummary = {
   currentWeekStart: '',
   currentWeekEnd: '',
   timezone: 'America/Santiago',
+}
+
+function toPercentageWidth(
+  value: number
+): `${number}%` {
+  const safeValue = Math.min(
+    100,
+    Math.max(0, value)
+  )
+
+  return `${safeValue}%` as `${number}%`
 }
 
 function getRelatedPlaza(
@@ -265,6 +296,12 @@ export default function ProfileScreen() {
       EMPTY_GAMIFICATION
     )
 
+  const [achievementOverview, setAchievementOverview] =
+    useState({
+      total: 0,
+      unlocked: 0,
+    })
+
   const [updatingWeeklyGoal, setUpdatingWeeklyGoal] =
     useState<number | null>(null)
 
@@ -279,6 +316,35 @@ export default function ProfileScreen() {
           setRefreshing(true)
         }
 
+        /*
+         * Primero evaluamos los logros.
+         * Este RPC puede entregar XP nuevo.
+         */
+        const {
+          data: achievementData,
+          error: achievementError,
+        } = await supabase.rpc(
+          'evaluate_my_achievements'
+        )
+
+        if (achievementError) {
+          throw achievementError
+        }
+
+        const achievementEvaluation =
+          (achievementData ?? {
+            summary: {
+              total: 0,
+              unlocked: 0,
+            },
+            newly_unlocked: [],
+          }) as AchievementEvaluationResult
+
+        /*
+         * Después consultamos el resumen.
+         * Así el XP de los logros recién
+         * desbloqueados ya estará incluido.
+         */
         const [
           checkinsRes,
           favoritesRes,
@@ -288,15 +354,18 @@ export default function ProfileScreen() {
             .from('plaza_checkins')
             .select(
               `
-              id,
-              created_at,
-              plazas (
-                nombre,
-                comuna
-              )
-            `
+            id,
+            created_at,
+            plazas (
+              nombre,
+              comuna
             )
-            .eq('user_id', session.user.id)
+          `
+            )
+            .eq(
+              'user_id',
+              session.user.id
+            )
             .order(
               'created_at',
               { ascending: false }
@@ -306,15 +375,18 @@ export default function ProfileScreen() {
             .from('favorite_plazas')
             .select(
               `
+            id,
+            plazas (
               id,
-              plazas (
-                id,
-                nombre,
-                comuna
-              )
-            `
+              nombre,
+              comuna
             )
-            .eq('user_id', session.user.id)
+          `
+            )
+            .eq(
+              'user_id',
+              session.user.id
+            )
             .order(
               'created_at',
               { ascending: false }
@@ -343,8 +415,15 @@ export default function ProfileScreen() {
         const favoritePlazas =
           (favoritesRes.data ?? []) as FavoritePlaza[]
 
-        setRecentCheckins(checkins.slice(0, 10))
+        /*
+         * Actualización de todos los estados.
+         */
+        setRecentCheckins(
+          checkins.slice(0, 10)
+        )
+
         setTotalVisits(checkins.length)
+
         setFavorites(favoritePlazas)
 
         setGamification(
@@ -352,11 +431,50 @@ export default function ProfileScreen() {
             gamificationRes.data
           )
         )
+
+        setAchievementOverview({
+          total: Number(
+            achievementEvaluation
+              .summary?.total ?? 0
+          ),
+          unlocked: Number(
+            achievementEvaluation
+              .summary?.unlocked ?? 0
+          ),
+        })
+
+        /*
+         * La alerta se muestra al final.
+         */
+        const newlyUnlocked =
+          Array.isArray(
+            achievementEvaluation
+              .newly_unlocked
+          )
+            ? achievementEvaluation
+              .newly_unlocked
+            : []
+
+        if (newlyUnlocked.length > 0) {
+          const message = newlyUnlocked
+            .map(
+              (achievement) =>
+                `${achievement.name} (+${achievement.xp_reward} XP)`
+            )
+            .join('\n')
+
+          Alert.alert(
+            newlyUnlocked.length === 1
+              ? '¡Logro desbloqueado!'
+              : '¡Nuevos logros!',
+            message
+          )
+        }
       } catch (error: any) {
         Alert.alert(
           'Error',
           error.message ??
-            'No se pudo cargar el perfil.'
+          'No se pudo cargar el perfil.'
         )
       } finally {
         setLoading(false)
@@ -380,44 +498,6 @@ export default function ProfileScreen() {
       Alert.alert('Error', error.message)
     }
   }
-
-  function formatDate(dateString: string) {
-    const date = new Date(dateString)
-
-    return date.toLocaleDateString('es-CL', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    })
-  }
-
-  const trainingMinutes = Math.max(
-    0,
-    Math.round(
-      gamification.trainingSeconds / 60
-    )
-  )
-
-  const progressWidth =
-    `${gamification.levelProgress}%` as const
-
-  const weeklyProgressWidth =
-    `${gamification.weeklyProgress}%` as const
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.center}>
-        <ActivityIndicator
-          size="large"
-          color="#16a34a"
-        />
-      </SafeAreaView>
-    )
-  }
-
-
-  
-
 
 
   async function handleWeeklyGoalChange(
@@ -455,6 +535,52 @@ export default function ProfileScreen() {
   }
 
 
+
+  function formatDate(dateString: string) {
+    const date = new Date(dateString)
+
+    return date.toLocaleDateString('es-CL', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    })
+  }
+
+  const trainingMinutes = Math.max(
+    0,
+    Math.round(
+      gamification.trainingSeconds / 60
+    )
+  )
+
+  const progressWidth = toPercentageWidth(
+    gamification.levelProgress
+  )
+
+  const weeklyProgressWidth = toPercentageWidth(
+    gamification.weeklyProgress
+  )
+
+  const achievementProgressWidth =
+    toPercentageWidth(
+      achievementOverview.total > 0
+        ? (
+            achievementOverview.unlocked /
+            achievementOverview.total
+          ) * 100
+        : 0
+    )
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <ActivityIndicator
+          size="large"
+          color="#16a34a"
+        />
+      </SafeAreaView>
+    )
+  }
 
 
 
@@ -720,6 +846,69 @@ export default function ProfileScreen() {
             })}
           </View>
         </View>
+
+
+
+
+
+
+
+
+        <Pressable
+          style={styles.achievementsCard}
+          onPress={() => router.push('/logros')}
+        >
+          <View style={styles.achievementsIcon}>
+            <Ionicons
+              name="trophy-outline"
+              size={26}
+              color="#166534"
+            />
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.achievementsEyebrow}>
+              Logros
+            </Text>
+
+            <Text style={styles.achievementsTitle}>
+              {achievementOverview.unlocked} de{' '}
+              {achievementOverview.total}{' '}
+              desbloqueados
+            </Text>
+
+            <View style={styles.achievementsTrack}>
+              <View
+                style={[
+                  styles.achievementsFill,
+                  {
+                    width: achievementProgressWidth,
+                  },
+                ]}
+              />
+            </View>
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={22}
+            color="#16a34a"
+          />
+        </Pressable>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1272,5 +1461,47 @@ const styles = StyleSheet.create({
   },
   goalChipTextActive: {
     color: '#ffffff',
+  },
+  achievementsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    borderRadius: 18,
+    padding: 17,
+  },
+  achievementsIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  achievementsEyebrow: {
+    color: '#16a34a',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  achievementsTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  achievementsTrack: {
+    height: 7,
+    backgroundColor: '#dcfce7',
+    borderRadius: 999,
+    overflow: 'hidden',
+    marginTop: 9,
+  },
+  achievementsFill: {
+    height: '100%',
+    backgroundColor: '#16a34a',
+    borderRadius: 999,
   },
 })

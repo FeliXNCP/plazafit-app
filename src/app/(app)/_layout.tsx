@@ -15,6 +15,20 @@ export default function AppLayout() {
         options={{ headerShown: false,}}
       />
 
+
+      <Stack.Screen
+        name="logros"
+        options={{
+          headerShown: true,
+          title: 'Logros',
+          headerTintColor: '#166534',
+          headerStyle: {
+            backgroundColor: '#f0fdf4',
+          },
+          headerShadowVisible: false,
+        }}
+      />
+
     </Stack>
   )
 }
