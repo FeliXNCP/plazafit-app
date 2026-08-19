@@ -57,6 +57,18 @@ type GamificationRpcResult = {
 
   completed_workouts: number
   training_seconds: number
+
+  completed_sessions: number
+
+  weekly_workout_goal: number
+  current_week_workouts: number
+  weekly_progress: number
+  weekly_goal_completed: boolean
+  current_streak_weeks: number
+
+  current_week_start: string
+  current_week_end: string
+  timezone: string
 }
 
 type GamificationSummary = {
@@ -75,6 +87,18 @@ type GamificationSummary = {
 
   completedWorkouts: number
   trainingSeconds: number
+
+  completedSessions: number
+
+  weeklyWorkoutGoal: number
+  currentWeekWorkouts: number
+  weeklyProgress: number
+  weeklyGoalCompleted: boolean
+  currentStreakWeeks: number
+
+  currentWeekStart: string
+  currentWeekEnd: string
+  timezone: string  
 }
 
 const EMPTY_GAMIFICATION: GamificationSummary = {
@@ -93,6 +117,18 @@ const EMPTY_GAMIFICATION: GamificationSummary = {
 
   completedWorkouts: 0,
   trainingSeconds: 0,
+
+  completedSessions: 0,
+
+  weeklyWorkoutGoal: 3,
+  currentWeekWorkouts: 0,
+  weeklyProgress: 0,
+  weeklyGoalCompleted: false,
+  currentStreakWeeks: 0,
+
+  currentWeekStart: '',
+  currentWeekEnd: '',
+  timezone: 'America/Santiago',
 }
 
 function getRelatedPlaza(
@@ -164,6 +200,42 @@ function normalizeGamificationSummary(
 
     trainingSeconds:
       Number(raw.training_seconds ?? 0),
+
+
+    completedSessions:
+      Number(raw.completed_sessions ?? 0),
+
+    weeklyWorkoutGoal:
+      Number(raw.weekly_workout_goal ?? 3),
+
+    currentWeekWorkouts:
+      Number(raw.current_week_workouts ?? 0),
+
+    weeklyProgress:
+      Math.min(
+        100,
+        Math.max(
+          0,
+          Number(raw.weekly_progress ?? 0)
+        )
+      ),
+
+    weeklyGoalCompleted:
+      Boolean(raw.weekly_goal_completed),
+
+    currentStreakWeeks:
+      Number(raw.current_streak_weeks ?? 0),
+
+    currentWeekStart:
+      String(raw.current_week_start ?? ''),
+
+    currentWeekEnd:
+      String(raw.current_week_end ?? ''),
+
+    timezone:
+      String(
+        raw.timezone ?? 'America/Santiago'
+      ),
   }
 }
 
@@ -192,6 +264,9 @@ export default function ProfileScreen() {
     useState<GamificationSummary>(
       EMPTY_GAMIFICATION
     )
+
+  const [updatingWeeklyGoal, setUpdatingWeeklyGoal] =
+    useState<number | null>(null)
 
   const fetchProfileData = useCallback(
     async (initialLoad = false) => {
@@ -326,6 +401,9 @@ export default function ProfileScreen() {
   const progressWidth =
     `${gamification.levelProgress}%` as const
 
+  const weeklyProgressWidth =
+    `${gamification.weeklyProgress}%` as const
+
   if (loading) {
     return (
       <SafeAreaView style={styles.center}>
@@ -336,6 +414,49 @@ export default function ProfileScreen() {
       </SafeAreaView>
     )
   }
+
+
+  
+
+
+
+  async function handleWeeklyGoalChange(
+    goal: number
+  ) {
+    if (
+      updatingWeeklyGoal !== null ||
+      goal === gamification.weeklyWorkoutGoal
+    ) {
+      return
+    }
+
+    try {
+      setUpdatingWeeklyGoal(goal)
+
+      const { error } = await supabase.rpc(
+        'set_my_weekly_workout_goal',
+        {
+          p_goal: goal,
+        }
+      )
+
+      if (error) throw error
+
+      await fetchProfileData(false)
+    } catch (error: any) {
+      Alert.alert(
+        'No se pudo actualizar',
+        error.message ??
+        'No se pudo cambiar el objetivo semanal.'
+      )
+    } finally {
+      setUpdatingWeeklyGoal(null)
+    }
+  }
+
+
+
+
 
   return (
     <SafeAreaView
@@ -404,6 +525,7 @@ export default function ProfileScreen() {
                 />
               </View>
 
+
               <View style={{ flex: 1 }}>
                 <Text style={styles.levelEyebrow}>
                   Nivel {gamification.currentLevel}
@@ -457,6 +579,151 @@ export default function ProfileScreen() {
           </Text>
         </View>
 
+
+
+
+        <View style={styles.weeklyCard}>
+          <View style={styles.weeklyHeader}>
+            <View style={styles.weeklyIdentity}>
+              <View style={styles.weeklyIcon}>
+                <Ionicons
+                  name="calendar-outline"
+                  size={23}
+                  color="#166534"
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.weeklyEyebrow}>
+                  Objetivo semanal
+                </Text>
+
+                <Text style={styles.weeklyTitle}>
+                  {gamification.currentWeekWorkouts} de{' '}
+                  {gamification.weeklyWorkoutGoal}{' '}
+                  entrenamientos
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.streakBadge}>
+              <Ionicons
+                name="flame-outline"
+                size={17}
+                color="#c2410c"
+              />
+
+              <Text style={styles.streakText}>
+                {gamification.currentStreakWeeks}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.weeklyProgressHeader}>
+            <Text style={styles.weeklyProgressText}>
+              {gamification.weeklyGoalCompleted
+                ? 'Objetivo cumplido'
+                : `${Math.max(
+                  gamification.weeklyWorkoutGoal -
+                  gamification.currentWeekWorkouts,
+                  0
+                )} entrenamiento${Math.max(
+                  gamification.weeklyWorkoutGoal -
+                  gamification.currentWeekWorkouts,
+                  0
+                ) === 1
+                  ? ''
+                  : 's'
+                } pendiente${Math.max(
+                  gamification.weeklyWorkoutGoal -
+                  gamification.currentWeekWorkouts,
+                  0
+                ) === 1
+                  ? ''
+                  : 's'
+                }`}
+            </Text>
+
+            <Text style={styles.weeklyProgressPercent}>
+              {Math.round(
+                gamification.weeklyProgress
+              )}
+              %
+            </Text>
+          </View>
+
+          <View style={styles.weeklyProgressTrack}>
+            <View
+              style={[
+                styles.weeklyProgressFill,
+                { width: weeklyProgressWidth },
+              ]}
+            />
+          </View>
+
+          <Text style={styles.streakDescription}>
+            {gamification.currentStreakWeeks > 0
+              ? `🔥 ${gamification.currentStreakWeeks} semana${gamification.currentStreakWeeks === 1
+                ? ''
+                : 's'
+              } consecutiva${gamification.currentStreakWeeks === 1
+                ? ''
+                : 's'
+              } cumpliendo tu objetivo.`
+              : 'Cumple tu objetivo para comenzar una racha semanal.'}
+          </Text>
+
+          <Text style={styles.goalSelectorLabel}>
+            Entrenamientos por semana
+          </Text>
+
+          <View style={styles.goalSelector}>
+            {[1, 2, 3, 4, 5].map((goal) => {
+              const active =
+                gamification.weeklyWorkoutGoal === goal
+
+              const updating =
+                updatingWeeklyGoal === goal
+
+              return (
+                <Pressable
+                  key={goal}
+                  style={[
+                    styles.goalChip,
+                    active && styles.goalChipActive,
+                  ]}
+                  onPress={() =>
+                    void handleWeeklyGoalChange(goal)
+                  }
+                  disabled={
+                    updatingWeeklyGoal !== null
+                  }
+                >
+                  {updating ? (
+                    <ActivityIndicator
+                      size="small"
+                      color="#ffffff"
+                    />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.goalChipText,
+                        active &&
+                        styles.goalChipTextActive,
+                      ]}
+                    >
+                      {goal}
+                    </Text>
+                  )}
+                </Pressable>
+              )
+            })}
+          </View>
+        </View>
+
+
+
+
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
             <View style={styles.statIcon}>
@@ -472,7 +739,7 @@ export default function ProfileScreen() {
             </Text>
 
             <Text style={styles.statLabel}>
-              Entrenamientos
+              Entrenamientos válidos
             </Text>
           </View>
 
@@ -886,5 +1153,124 @@ const styles = StyleSheet.create({
   logoutButtonText: {
     color: '#b91c1c',
     fontWeight: '800',
+  },
+  weeklyCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+  },
+  weeklyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  weeklyIdentity: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+  },
+  weeklyIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weeklyEyebrow: {
+    color: '#16a34a',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  weeklyTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  streakBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ffedd5',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  streakText: {
+    color: '#c2410c',
+    fontWeight: '900',
+  },
+  weeklyProgressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 18,
+    marginBottom: 9,
+  },
+  weeklyProgressText: {
+    color: '#374151',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  weeklyProgressPercent: {
+    color: '#16a34a',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  weeklyProgressTrack: {
+    height: 10,
+    backgroundColor: '#dcfce7',
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  weeklyProgressFill: {
+    height: '100%',
+    backgroundColor: '#16a34a',
+    borderRadius: 999,
+  },
+  streakDescription: {
+    color: '#4b5563',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 12,
+  },
+  goalSelectorLabel: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 17,
+    marginBottom: 9,
+  },
+  goalSelector: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  goalChip: {
+    flex: 1,
+    height: 39,
+    borderRadius: 12,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goalChipActive: {
+    backgroundColor: '#16a34a',
+    borderColor: '#16a34a',
+  },
+  goalChipText: {
+    color: '#166534',
+    fontWeight: '800',
+  },
+  goalChipTextActive: {
+    color: '#ffffff',
   },
 })

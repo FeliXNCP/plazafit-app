@@ -1,9 +1,21 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { router, useLocalSearchParams } from 'expo-router'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  router,
+  useFocusEffect,
+  useLocalSearchParams,
+} from 'expo-router'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   ActivityIndicator,
   Alert,
+  AppState,
+  type AppStateStatus,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -34,10 +46,36 @@ type WorkoutSession = Pick<
   | 'reward_reason'
   | 'workout_duration_seconds'
   | 'xp_awarded'
+  | 'active_duration_seconds'
+  | 'active_segment_started_at'
 >
 
 type WorkoutStep =
   Database['public']['Tables']['workout_session_steps']['Row']
+
+type LoadedWorkout = {
+  session: WorkoutSession
+  steps: WorkoutStep[]
+}
+
+type ActiveClock = {
+  stepId: number
+  elapsedAtAnchor: number
+  anchorMs: number
+}
+
+type RestClock = {
+  nextStepOrder: number
+  remainingAtAnchor: number
+  anchorMs: number
+}
+
+type FinishWorkoutStepResult = {
+  session_status?: string
+  transition?: 'rest' | 'summary'
+  next_step_order?: number
+  rest_seconds?: number
+}
 
 function formatClock(totalSeconds: number) {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds))
@@ -48,7 +86,7 @@ function formatClock(totalSeconds: number) {
 }
 
 function formatLongDuration(totalSeconds: number) {
-  const safeSeconds = Math.max(0, Math.floor(totalSeconds))
+  const safeSeconds = Math.max(0, Math.ceil(totalSeconds))
   const minutes = Math.floor(safeSeconds / 60)
   const seconds = safeSeconds % 60
 
@@ -58,83 +96,429 @@ function formatLongDuration(totalSeconds: number) {
   return `${minutes} min ${seconds} s`
 }
 
+function getServerRemainingSeconds(error: unknown): number | null {
+  const details = (error as { details?: unknown } | null)?.details
+
+  if (!details) return null
+
+  try {
+    const parsed =
+      typeof details === 'string'
+        ? JSON.parse(details)
+        : details
+
+    const remaining = Number(
+      (parsed as { remaining_seconds?: unknown })?.remaining_seconds
+    )
+
+    return Number.isFinite(remaining) ? remaining : null
+  } catch {
+    return null
+  }
+}
+
 export default function WorkoutScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
 
   const [session, setSession] = useState<WorkoutSession | null>(null)
   const [steps, setSteps] = useState<WorkoutStep[]>([])
+
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
+  const [submittedElapsedSeconds, setSubmittedElapsedSeconds] =
+    useState<number | null>(null)
   const [activating, setActivating] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [nowMs, setNowMs] = useState(Date.now())
 
-  const fetchWorkout = useCallback(async () => {
+  const [nowMs, setNowMs] = useState(Date.now())
+  const [screenIsFocused, setScreenIsFocused] = useState(false)
+  const [appIsActive, setAppIsActive] = useState(
+    (AppState.currentState ?? 'active') === 'active'
+  )
+  const [clockReady, setClockReady] = useState(false)
+
+  const [activeClock, setActiveClock] = useState<ActiveClock | null>(null)
+  const [restClock, setRestClock] = useState<RestClock | null>(null)
+
+  const screenFocusedRef = useRef(false)
+  const appStateRef = useRef<AppStateStatus>(
+    AppState.currentState ?? 'active'
+  )
+  const lifecycleGenerationRef = useRef(0)
+  const lifecycleQueueRef = useRef<Promise<void>>(Promise.resolve())
+
+  const enqueueLifecycleTask = useCallback(
+    (task: () => Promise<void>) => {
+      const next = lifecycleQueueRef.current.then(
+        () => task(),
+        () => task()
+      )
+
+      lifecycleQueueRef.current = next.catch((error) => {
+        console.warn('Error sincronizando el entrenamiento:', error)
+      })
+
+      return next
+    },
+    []
+  )
+
+  const fetchWorkout = useCallback(
+    async (): Promise<LoadedWorkout | null> => {
+      if (!id) return null
+
+      try {
+        setLoadError(null)
+
+        const [sessionRes, stepsRes] = await Promise.all([
+          supabase
+            .from('workout_sessions')
+            .select(
+              `
+              id,
+              routine_id,
+              plaza_id,
+              routine_title_snapshot,
+              plaza_name_snapshot,
+              status,
+              current_step_order,
+              started_at,
+              completed_at,
+              abandoned_at,
+              total_steps,
+              completed_steps,
+              skipped_steps,
+              completion_percentage,
+              reward_eligible,
+              reward_reason,
+              workout_duration_seconds,
+              xp_awarded,
+              active_duration_seconds,
+              active_segment_started_at
+            `
+            )
+            .eq('id', id)
+            .single(),
+
+          supabase
+            .from('workout_session_steps')
+            .select('*')
+            .eq('session_id', id)
+            .order('step_order', { ascending: true }),
+        ])
+
+        if (sessionRes.error) throw sessionRes.error
+        if (stepsRes.error) throw stepsRes.error
+
+        const nextSession = sessionRes.data as WorkoutSession
+        const nextSteps = (stepsRes.data ?? []) as WorkoutStep[]
+
+        setSession(nextSession)
+        setSteps(nextSteps)
+
+        return {
+          session: nextSession,
+          steps: nextSteps,
+        }
+      } catch (error: any) {
+        setLoadError(
+          error.message ?? 'No se pudo cargar el entrenamiento.'
+        )
+
+        return null
+      } finally {
+        setLoading(false)
+      }
+    },
+    [id]
+  )
+
+  const freezeLocalClocks = useCallback(() => {
+    const now = Date.now()
+
+    setActiveClock((current) => {
+      if (!current) return null
+
+      const elapsedSinceAnchor = Math.max(
+        0,
+        Math.floor((now - current.anchorMs) / 1000)
+      )
+
+      return {
+        ...current,
+        elapsedAtAnchor:
+          current.elapsedAtAnchor + elapsedSinceAnchor,
+        anchorMs: now,
+      }
+    })
+
+    setRestClock((current) => {
+      if (!current) return null
+
+      const elapsedSinceAnchor = Math.max(
+        0,
+        Math.floor((now - current.anchorMs) / 1000)
+      )
+
+      return {
+        ...current,
+        remainingAtAnchor: Math.max(
+          current.remainingAtAnchor - elapsedSinceAnchor,
+          0
+        ),
+        anchorMs: now,
+      }
+    })
+
+    setNowMs(now)
+  }, [])
+
+  const pauseOnServer = useCallback(async () => {
     if (!id) return
 
-    try {
-      setLoadError(null)
+    const { error } = await supabase.rpc('pause_workout_session', {
+      p_session_id: id,
+    })
 
-      const [sessionRes, stepsRes] = await Promise.all([
-        supabase
-          .from('workout_sessions')
-          .select(
-            `
-            id,
-            routine_id,
-            plaza_id,
-            routine_title_snapshot,
-            plaza_name_snapshot,
-            status,
-            current_step_order,
-            started_at,
-            completed_at,
-            abandoned_at,
-            total_steps,
-            completed_steps,
-            skipped_steps,
-            completion_percentage,
-            reward_eligible,
-            reward_reason,
-            workout_duration_seconds,
-            xp_awarded
-        `
-          )
-          .eq('id', id)
-          .single(),
-
-        supabase
-          .from('workout_session_steps')
-          .select('*')
-          .eq('session_id', id)
-          .order('step_order', { ascending: true }),
-      ])
-
-      if (sessionRes.error) throw sessionRes.error
-      if (stepsRes.error) throw stepsRes.error
-
-      setSession(sessionRes.data as WorkoutSession)
-      setSteps((stepsRes.data ?? []) as WorkoutStep[])
-    } catch (error: any) {
-      setLoadError(
-        error.message ?? 'No se pudo cargar el entrenamiento.'
-      )
-    } finally {
-      setLoading(false)
+    if (error) {
+      console.warn('No se pudo pausar la sesión:', error.message)
     }
   }, [id])
 
-  useEffect(() => {
-    void fetchWorkout()
-  }, [fetchWorkout])
+  const resumeOnServer = useCallback(async () => {
+    if (!id) return false
+
+    const { error } = await supabase.rpc('resume_workout_session', {
+      p_session_id: id,
+    })
+
+    if (error) {
+      console.warn('No se pudo reanudar la sesión:', error.message)
+      return false
+    }
+
+    return true
+  }, [id])
+
+  const syncActiveStepOnServer = useCallback(async () => {
+    if (!id) return false
+
+    const { error } = await supabase.rpc(
+      'sync_active_workout_step_clock',
+      {
+        p_session_id: id,
+      }
+    )
+
+    if (error) {
+      console.warn(
+        'No se pudo sincronizar el paso activo:',
+        error.message
+      )
+      return false
+    }
+
+    return true
+  }, [id])
+
+  const initializeLocalClocks = useCallback(
+    (loaded: LoadedWorkout) => {
+      const now = Date.now()
+      const activeStep =
+        loaded.steps.find((step) => step.status === 'active') ?? null
+
+      if (activeStep) {
+        setActiveClock({
+          stepId: activeStep.id,
+          elapsedAtAnchor: activeStep.active_duration_seconds ?? 0,
+          anchorMs: now,
+        })
+        setRestClock(null)
+        setNowMs(now)
+        return
+      }
+
+      setActiveClock(null)
+
+      const pendingStep =
+        loaded.steps.find(
+          (step) =>
+            step.step_order === loaded.session.current_step_order &&
+            step.status === 'pending'
+        ) ?? null
+
+      if (!pendingStep) {
+        setRestClock(null)
+        setNowMs(now)
+        return
+      }
+
+      const previousStep =
+        [...loaded.steps]
+          .filter(
+            (step) =>
+              step.step_order < pendingStep.step_order &&
+              (step.status === 'completed' || step.status === 'skipped')
+          )
+          .sort((a, b) => b.step_order - a.step_order)[0] ?? null
+
+      const fullRestSeconds =
+        previousStep?.status === 'completed'
+          ? previousStep.target_rest_seconds ?? 0
+          : 0
+
+      setRestClock((current) => {
+        if (current?.nextStepOrder === pendingStep.step_order) {
+          return {
+            ...current,
+            anchorMs: now,
+          }
+        }
+
+        return {
+          nextStepOrder: pendingStep.step_order,
+          remainingAtAnchor: fullRestSeconds,
+          anchorMs: now,
+        }
+      })
+
+      setNowMs(now)
+    },
+    []
+  )
+
+  const synchronizeRunningState = useCallback(
+    async (generation: number) => {
+      setClockReady(false)
+
+      await enqueueLifecycleTask(async () => {
+        const isStillCurrent = () =>
+          generation === lifecycleGenerationRef.current &&
+          screenFocusedRef.current &&
+          appStateRef.current === 'active'
+
+        const loaded = await fetchWorkout()
+
+        if (!loaded) return
+
+        if (loaded.session.status !== 'in_progress') {
+          if (isStillCurrent()) {
+            setActiveClock(null)
+            setRestClock(null)
+            setClockReady(false)
+          }
+          return
+        }
+
+        if (!isStillCurrent()) return
+
+        const resumed = await resumeOnServer()
+        if (!resumed || !isStillCurrent()) return
+
+        const hasActiveStep = loaded.steps.some(
+          (step) => step.status === 'active'
+        )
+
+        if (hasActiveStep) {
+          const synchronized = await syncActiveStepOnServer()
+          if (!synchronized || !isStillCurrent()) return
+        }
+
+        initializeLocalClocks(loaded)
+
+        if (isStillCurrent()) {
+          setClockReady(true)
+        }
+      })
+    },
+    [
+      enqueueLifecycleTask,
+      fetchWorkout,
+      initializeLocalClocks,
+      resumeOnServer,
+      syncActiveStepOnServer,
+    ]
+  )
+
+  const requestPause = useCallback(() => {
+    lifecycleGenerationRef.current += 1
+    setClockReady(false)
+    freezeLocalClocks()
+
+    return enqueueLifecycleTask(async () => {
+      await pauseOnServer()
+    })
+  }, [enqueueLifecycleTask, freezeLocalClocks, pauseOnServer])
+
+  const requestResume = useCallback(() => {
+    const generation = lifecycleGenerationRef.current + 1
+    lifecycleGenerationRef.current = generation
+    setClockReady(false)
+
+    return synchronizeRunningState(generation)
+  }, [synchronizeRunningState])
+
+  useFocusEffect(
+    useCallback(() => {
+      screenFocusedRef.current = true
+      setScreenIsFocused(true)
+
+      const currentAppState = AppState.currentState ?? 'active'
+      appStateRef.current = currentAppState
+      setAppIsActive(currentAppState === 'active')
+
+      if (currentAppState === 'active') {
+        void requestResume()
+      }
+
+      return () => {
+        screenFocusedRef.current = false
+        setScreenIsFocused(false)
+        void requestPause()
+      }
+    }, [requestPause, requestResume])
+  )
 
   useEffect(() => {
+    const subscription = AppState.addEventListener(
+      'change',
+      (nextState) => {
+        const previousState = appStateRef.current
+        appStateRef.current = nextState
+
+        const nextIsActive = nextState === 'active'
+        setAppIsActive(nextIsActive)
+
+        if (!screenFocusedRef.current) return
+
+        if (previousState === 'active' && !nextIsActive) {
+          void requestPause()
+          return
+        }
+
+        if (previousState !== 'active' && nextIsActive) {
+          void requestResume()
+        }
+      }
+    )
+
+    return () => subscription.remove()
+  }, [requestPause, requestResume])
+
+  const clockIsRunning =
+    screenIsFocused && appIsActive && clockReady
+
+  useEffect(() => {
+    if (!clockIsRunning) return
+
+    setNowMs(Date.now())
+
     const interval = setInterval(() => {
       setNowMs(Date.now())
-    }, 1000)
+    }, 200)
 
     return () => clearInterval(interval)
-  }, [])
+  }, [clockIsRunning])
 
   const activeStep =
     steps.find((step) => step.status === 'active') ?? null
@@ -177,84 +561,144 @@ export default function WorkoutScreen() {
   const progressPercent =
     steps.length > 0 ? (processedSteps / steps.length) * 100 : 0
 
-  const activeElapsedSeconds =
-    activeStep?.started_at
+  const localActiveSegmentSeconds =
+    activeStep &&
+    activeClock?.stepId === activeStep.id &&
+    clockIsRunning
       ? Math.max(
           0,
-          Math.floor(
-            (nowMs - new Date(activeStep.started_at).getTime()) / 1000
-          )
+          Math.floor((nowMs - activeClock.anchorMs) / 1000)
         )
       : 0
 
+  const activeElapsedSeconds =
+    activeStep && activeClock?.stepId === activeStep.id
+      ? activeClock.elapsedAtAnchor + localActiveSegmentSeconds
+      : activeStep?.active_duration_seconds ?? 0
 
-
-    const minimumCompletionSeconds =
-        activeStep?.minimum_completion_seconds ?? 0
-
-    const completionUnlockRemainingSeconds =
-        activeStep
-            ? Math.max(
-                minimumCompletionSeconds -
-                activeElapsedSeconds,
-                0
-            )
-            : 0
-
-    const canCompleteActiveStep =
-        activeStep !== null &&
-        (
-            minimumCompletionSeconds === 0 ||
-            completionUnlockRemainingSeconds === 0
-        )
-
+  /*
+   * Al enviar "Completar" o "Saltar", congelamos el valor
+   * visible del reloj hasta que Supabase confirme la transición.
+   * Así el paso anterior no vuelve momentáneamente a su duración
+   * inicial mientras se consulta el nuevo estado.
+   */
+  const displayedActiveElapsedSeconds =
+    processing && submittedElapsedSeconds !== null
+      ? submittedElapsedSeconds
+      : activeElapsedSeconds
 
   const activeRemainingSeconds =
     activeStep?.target_duration_seconds != null
       ? Math.max(
-          activeStep.target_duration_seconds - activeElapsedSeconds,
+          activeStep.target_duration_seconds -
+            displayedActiveElapsedSeconds,
           0
         )
       : null
 
-  const restTotalSeconds =
-    previousStep?.status === 'completed'
-      ? previousStep.target_rest_seconds ?? 0
-      : 0
+  const minimumCompletionSeconds =
+    activeStep?.minimum_completion_seconds ?? 0
 
-  const restAnchor =
-    previousStep?.completed_at ?? previousStep?.skipped_at ?? null
-
-  const restElapsedSeconds = restAnchor
+  const completionUnlockRemainingSeconds = activeStep
     ? Math.max(
-        0,
-        Math.floor((nowMs - new Date(restAnchor).getTime()) / 1000)
+        minimumCompletionSeconds - activeElapsedSeconds,
+        0
       )
     : 0
 
-  const restRemainingSeconds = Math.max(
-    restTotalSeconds - restElapsedSeconds,
-    0
-  )
+  const canCompleteActiveStep =
+    activeStep !== null &&
+    clockIsRunning &&
+    (minimumCompletionSeconds === 0 ||
+      completionUnlockRemainingSeconds === 0)
+
+  const restElapsedSeconds =
+    restClock && clockIsRunning
+      ? Math.max(
+          0,
+          Math.floor((nowMs - restClock.anchorMs) / 1000)
+        )
+      : 0
+
+  const restRemainingSeconds = restClock
+    ? Math.max(
+        restClock.remainingAtAnchor - restElapsedSeconds,
+        0
+      )
+    : 0
 
   const isBetweenSteps =
     session?.status === 'in_progress' &&
     !activeStep &&
     currentPendingStep !== null
 
+  useEffect(() => {
+    if (!clockIsRunning) return
+    if (!isBetweenSteps || !currentPendingStep) return
+
+    if (restClock?.nextStepOrder === currentPendingStep.step_order) {
+      return
+    }
+
+    const fullRestSeconds =
+      previousStep?.status === 'completed'
+        ? previousStep.target_rest_seconds ?? 0
+        : 0
+
+    setRestClock({
+      nextStepOrder: currentPendingStep.step_order,
+      remainingAtAnchor: fullRestSeconds,
+      anchorMs: Date.now(),
+    })
+  }, [
+    clockIsRunning,
+    currentPendingStep,
+    isBetweenSteps,
+    previousStep,
+    restClock?.nextStepOrder,
+  ])
+
   const activateCurrentStep = useCallback(async () => {
-    if (!session || activating) return
+    const currentSession = session
+
+    if (!currentSession || activating) return
+
+    const operationGeneration = lifecycleGenerationRef.current
 
     try {
       setActivating(true)
+      setClockReady(false)
 
-      const { error } = await supabase.rpc('activate_workout_step', {
-        p_session_id: session.id,
+      await enqueueLifecycleTask(async () => {
+        const { error } = await supabase.rpc(
+          'activate_workout_step',
+          {
+            p_session_id: currentSession.id,
+          }
+        )
+
+        if (error) throw error
+
+        const loaded = await fetchWorkout()
+        if (!loaded) {
+          throw new Error('No se pudo cargar el siguiente paso.')
+        }
+
+        const synchronized = await syncActiveStepOnServer()
+        if (!synchronized) {
+          throw new Error('No se pudo sincronizar el siguiente paso.')
+        }
+
+        const canApplyLocally =
+          operationGeneration === lifecycleGenerationRef.current &&
+          screenFocusedRef.current &&
+          appStateRef.current === 'active'
+
+        if (!canApplyLocally) return
+
+        initializeLocalClocks(loaded)
+        setClockReady(true)
       })
-
-      if (error) throw error
-
-      await fetchWorkout()
     } catch (error: any) {
       Alert.alert(
         'No se pudo continuar',
@@ -263,10 +707,19 @@ export default function WorkoutScreen() {
     } finally {
       setActivating(false)
     }
-  }, [activating, fetchWorkout, session])
+  }, [
+    activating,
+    enqueueLifecycleTask,
+    fetchWorkout,
+    initializeLocalClocks,
+    session,
+    syncActiveStepOnServer,
+  ])
 
   useEffect(() => {
+    if (!clockIsRunning) return
     if (!isBetweenSteps) return
+    if (!restClock) return
     if (restRemainingSeconds > 0) return
     if (activating) return
 
@@ -274,59 +727,102 @@ export default function WorkoutScreen() {
   }, [
     activateCurrentStep,
     activating,
+    clockIsRunning,
     isBetweenSteps,
+    restClock,
     restRemainingSeconds,
   ])
 
   async function finishActiveStep(
     result: 'completed' | 'skipped'
   ) {
-    if (!session || !activeStep || processing) return
+    const currentSession = session
+    const currentStep = activeStep
+    const elapsedSecondsAtSubmit = activeElapsedSeconds
 
-    if (
-        result === 'completed' &&
-        !canCompleteActiveStep
-    ) {
-        Alert.alert(
-            'Tiempo mínimo pendiente',
-            `Podrás completar este ejercicio en ${formatLongDuration(
-                completionUnlockRemainingSeconds
-            )}. También puedes saltarlo.`
-        )
-        return
+    if (!currentSession || !currentStep || processing) return
+
+    if (result === 'completed' && !canCompleteActiveStep) {
+      Alert.alert(
+        'Tiempo mínimo pendiente',
+        `Podrás completar este ejercicio en ${formatLongDuration(
+          completionUnlockRemainingSeconds
+        )}. También puedes saltarlo.`
+      )
+      return
     }
 
-
     try {
+      setSubmittedElapsedSeconds(elapsedSecondsAtSubmit)
       setProcessing(true)
 
-      const { error } = await supabase.rpc('finish_workout_step', {
-        p_session_id: session.id,
-        p_result: result,
-        p_actual_duration_seconds: activeElapsedSeconds,
-      })
+      const { data, error } = await supabase.rpc(
+        'finish_workout_step',
+        {
+          p_session_id: currentSession.id,
+          p_result: result,
+          p_actual_duration_seconds: elapsedSecondsAtSubmit,
+        }
+      )
 
-      if (error) throw error
-
-      await fetchWorkout()
-    } catch (error: any) {
-        
+      if (error) {
         if (
-            error.message?.includes(
-                'STEP_MINIMUM_TIME_NOT_REACHED'
-            )
+          error.message?.includes('STEP_MINIMUM_TIME_NOT_REACHED')
         ) {
-            Alert.alert(
-                'Tiempo mínimo pendiente',
-                `Aún debes esperar ${formatLongDuration(
-                    completionUnlockRemainingSeconds
-                )} antes de completar este paso.`
-            )
-            return
+          const serverRemaining = getServerRemainingSeconds(error)
+
+          Alert.alert(
+            'Tiempo mínimo pendiente',
+            `Aún debes esperar ${Math.max(
+              serverRemaining ?? 1,
+              1
+            )} s antes de completar este paso.`
+          )
+          return
         }
 
+        throw error
+      }
+
+      const resultData = (data ?? {}) as FinishWorkoutStepResult
+
+      const loaded = await fetchWorkout()
+      if (!loaded) {
+        throw new Error(
+          'El paso fue guardado, pero no se pudo actualizar la sesión.'
+        )
+      }
+
+      setActiveClock(null)
+
+      if (
+        resultData.transition === 'rest' &&
+        resultData.next_step_order != null
+      ) {
+        const now = Date.now()
+
+        setRestClock({
+          nextStepOrder: resultData.next_step_order,
+          remainingAtAnchor: Math.max(
+            Number(resultData.rest_seconds ?? 0),
+            0
+          ),
+          anchorMs: now,
+        })
+        setNowMs(now)
+        setClockReady(true)
+      } else {
+        setRestClock(null)
+        setClockReady(false)
+      }
+    } catch (error: any) {
+      Alert.alert(
+        'No se pudo guardar',
+        error.message ?? 'No se pudo actualizar el ejercicio.'
+      )
     } finally {
       setProcessing(false)
+      setSubmittedElapsedSeconds(null)
     }
   }
 
@@ -353,24 +849,27 @@ export default function WorkoutScreen() {
   }
 
   async function confirmAbandonWorkout() {
-    if (!session) return
+    const currentSession = session
+    if (!currentSession) return
 
     try {
       setProcessing(true)
+      setClockReady(false)
+      freezeLocalClocks()
 
       const { error } = await supabase.rpc(
         'abandon_workout_session',
         {
-          p_session_id: session.id,
+          p_session_id: currentSession.id,
         }
       )
 
       if (error) throw error
 
-      if (session.routine_id) {
+      if (currentSession.routine_id) {
         router.replace({
           pathname: '/rutina/[id]',
-          params: { id: String(session.routine_id) },
+          params: { id: String(currentSession.routine_id) },
         })
       } else {
         router.replace('/')
@@ -423,9 +922,7 @@ export default function WorkoutScreen() {
     }
 
     if (step.target_duration_seconds) {
-      targets.push(
-        formatLongDuration(step.target_duration_seconds)
-      )
+      targets.push(formatLongDuration(step.target_duration_seconds))
     }
 
     return targets
@@ -468,29 +965,13 @@ export default function WorkoutScreen() {
 
   if (session.status === 'completed') {
     const totalSessionSeconds =
-      session.completed_at
-        ? Math.max(
-            0,
-            Math.floor(
-              (
-                new Date(session.completed_at).getTime() -
-                new Date(session.started_at).getTime()
-              ) / 1000
-            )
-          )
-        : 0
+      session.workout_duration_seconds ?? 0
 
     return (
       <SafeAreaView style={styles.screen}>
-        <ScrollView
-          contentContainerStyle={styles.summaryContainer}
-        >
+        <ScrollView contentContainerStyle={styles.summaryContainer}>
           <View style={styles.summaryIcon}>
-            <Ionicons
-              name="checkmark"
-              size={52}
-              color="#ffffff"
-            />
+            <Ionicons name="checkmark" size={52} color="#ffffff" />
           </View>
 
           <Text style={styles.summaryEyebrow}>
@@ -508,87 +989,66 @@ export default function WorkoutScreen() {
           <View style={styles.summaryStats}>
             <View style={styles.summaryStatCard}>
               <Text style={styles.summaryStatValue}>
-                {completedSteps}
+                {session.completed_steps ?? completedSteps}
               </Text>
-              <Text style={styles.summaryStatLabel}>
-                Completados
-              </Text>
+              <Text style={styles.summaryStatLabel}>Completados</Text>
             </View>
 
             <View style={styles.summaryStatCard}>
               <Text style={styles.summaryStatValue}>
-                {skippedSteps}
+                {session.skipped_steps ?? skippedSteps}
               </Text>
-              <Text style={styles.summaryStatLabel}>
-                Saltados
-              </Text>
+              <Text style={styles.summaryStatLabel}>Saltados</Text>
             </View>
 
             <View style={styles.summaryStatCard}>
               <Text style={styles.summaryStatValue}>
-                {Math.max(
-                  1,
-                  Math.round(totalSessionSeconds / 60)
-                )}
+                {Math.max(1, Math.round(totalSessionSeconds / 60))}
               </Text>
-              <Text style={styles.summaryStatLabel}>
-                Minutos
-              </Text>
+              <Text style={styles.summaryStatLabel}>Minutos</Text>
             </View>
           </View>
 
+          {session.reward_eligible ? (
+            <View style={styles.rewardCard}>
+              <View style={styles.rewardIcon}>
+                <Ionicons name="sparkles" size={24} color="#ffffff" />
+              </View>
 
-            {session.reward_eligible ? (
-                <View style={styles.rewardCard}>
-                    <View style={styles.rewardIcon}>
-                        <Ionicons
-                            name="sparkles"
-                            size={24}
-                            color="#ffffff"
-                        />
-                    </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rewardTitle}>
+                  +{session.xp_awarded} XP
+                </Text>
 
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.rewardTitle}>
-                            +{session.xp_awarded} XP
-                        </Text>
+                <Text style={styles.rewardText}>
+                  Completaste {session.completed_steps} de{' '}
+                  {session.total_steps} pasos y alcanzaste{' '}
+                  {Math.round(Number(session.completion_percentage ?? 0))}%
+                  de la rutina.
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.noRewardCard}>
+              <Ionicons
+                name="information-circle-outline"
+                size={24}
+                color="#92400e"
+              />
 
-                        <Text style={styles.rewardText}>
-                            Completaste{' '}
-                            {session.completed_steps} de{' '}
-                            {session.total_steps} pasos y alcanzaste{' '}
-                            {Math.round(
-                                Number(
-                                    session.completion_percentage ?? 0
-                                )
-                            )}
-                            % de la rutina.
-                        </Text>
-                    </View>
-                </View>
-            ) : (
-                <View style={styles.noRewardCard}>
-                    <Ionicons
-                        name="information-circle-outline"
-                        size={24}
-                        color="#92400e"
-                    />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.noRewardTitle}>
+                  Sesión guardada sin XP
+                </Text>
 
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.noRewardTitle}>
-                            Sesión guardada sin XP
-                        </Text>
-
-                        <Text style={styles.noRewardText}>
-                            Completaste{' '}
-                            {session.completed_steps} de{' '}
-                            {session.total_steps} pasos. Necesitas
-                            completar al menos el 75 % para recibir
-                            la recompensa.
-                        </Text>
-                    </View>
-                </View>
-            )}
+                <Text style={styles.noRewardText}>
+                  Completaste {session.completed_steps} de{' '}
+                  {session.total_steps} pasos. Necesitas completar al
+                  menos el 75 % para recibir la recompensa.
+                </Text>
+              </View>
+            </View>
+          )}
 
           <Pressable
             style={styles.primaryAction}
@@ -628,6 +1088,11 @@ export default function WorkoutScreen() {
     )
   }
 
+  const progressWidth = `${Math.min(
+    100,
+    Math.max(0, progressPercent)
+  )}%` as `${number}%`
+
   return (
     <SafeAreaView style={styles.screen}>
       <ScrollView
@@ -650,10 +1115,7 @@ export default function WorkoutScreen() {
             <Text style={styles.headerEyebrow}>
               Entrenamiento en curso
             </Text>
-            <Text
-              style={styles.headerTitle}
-              numberOfLines={1}
-            >
+            <Text style={styles.headerTitle} numberOfLines={1}>
               {session.routine_title_snapshot}
             </Text>
           </View>
@@ -674,11 +1136,20 @@ export default function WorkoutScreen() {
             <View
               style={[
                 styles.progressFill,
-                { width: `${progressPercent}%` },
+                { width: progressWidth },
               ]}
             />
           </View>
         </View>
+
+        {!clockReady && (
+          <View style={styles.syncCard}>
+            <ActivityIndicator size="small" color="#166534" />
+            <Text style={styles.syncText}>
+              Sincronizando temporizador...
+            </Text>
+          </View>
+        )}
 
         {activeStep ? (
           <View style={styles.exerciseCard}>
@@ -700,32 +1171,26 @@ export default function WorkoutScreen() {
 
             {renderTargetInformation(activeStep).length > 0 ? (
               <View style={styles.targetRow}>
-                {renderTargetInformation(activeStep).map(
-                  (target) => (
-                    <View
-                      key={target}
-                      style={styles.targetBadge}
-                    >
-                      <Text style={styles.targetBadgeText}>
-                        {target}
-                      </Text>
-                    </View>
-                  )
-                )}
+                {renderTargetInformation(activeStep).map((target) => (
+                  <View key={target} style={styles.targetBadge}>
+                    <Text style={styles.targetBadgeText}>{target}</Text>
+                  </View>
+                ))}
               </View>
             ) : null}
 
             <View style={styles.timerCard}>
               <Text style={styles.timerLabel}>
-                {activeRemainingSeconds !== null
-                  ? 'Tiempo restante'
-                  : 'Tiempo activo'}
+                {processing
+                  ? 'Guardando resultado'
+                  : activeRemainingSeconds !== null
+                    ? 'Tiempo restante'
+                    : 'Tiempo activo'}
               </Text>
 
               <Text style={styles.timerValue}>
                 {formatClock(
-                  activeRemainingSeconds ??
-                    activeElapsedSeconds
+                  activeRemainingSeconds ?? activeElapsedSeconds
                 )}
               </Text>
 
@@ -735,15 +1200,50 @@ export default function WorkoutScreen() {
                   Tiempo objetivo cumplido
                 </Text>
               ) : null}
-
             </View>
+
+            {minimumCompletionSeconds > 0 ? (
+              <View
+                style={[
+                  styles.minimumTimeMessage,
+                  canCompleteActiveStep &&
+                    styles.minimumTimeMessageReady,
+                ]}
+              >
+                <Ionicons
+                  name={
+                    canCompleteActiveStep
+                      ? 'checkmark-circle-outline'
+                      : 'lock-closed-outline'
+                  }
+                  size={18}
+                  color={
+                    canCompleteActiveStep ? '#166534' : '#92400e'
+                  }
+                />
+
+                <Text
+                  style={[
+                    styles.minimumTimeText,
+                    canCompleteActiveStep &&
+                      styles.minimumTimeTextReady,
+                  ]}
+                >
+                  {canCompleteActiveStep
+                    ? 'Ya puedes completar este paso.'
+                    : clockReady
+                      ? `Completar se habilita en ${formatClock(
+                          completionUnlockRemainingSeconds
+                        )}.`
+                      : 'Esperando sincronización del temporizador.'}
+                </Text>
+              </View>
+            ) : null}
 
             {activeStep.machine_type_id ? (
               <Pressable
                 style={styles.machineButton}
-                onPress={() =>
-                  openMachine(activeStep.machine_type_id!)
-                }
+                onPress={() => openMachine(activeStep.machine_type_id!)}
               >
                 <Ionicons
                   name="barbell-outline"
@@ -757,49 +1257,41 @@ export default function WorkoutScreen() {
             ) : null}
 
             <Pressable
-                style={[
-                    styles.completeButton,
-                    (
-                        processing ||
-                        !canCompleteActiveStep
-                    ) &&
-                    styles.completeButtonLocked,
-                ]}
-                onPress={() =>
-                    void finishActiveStep('completed')
-                }
-                disabled={
-                    processing ||
-                    !canCompleteActiveStep
-                }
+              style={[
+                styles.completeButton,
+                (processing || !canCompleteActiveStep) &&
+                  styles.completeButtonLocked,
+              ]}
+              onPress={() => void finishActiveStep('completed')}
+              disabled={processing || !canCompleteActiveStep}
             >
-                <Ionicons
-                    name={
-                        canCompleteActiveStep
-                            ? 'checkmark-circle-outline'
-                            : 'lock-closed-outline'
-                    }
-                    size={21}
-                    color="#ffffff"
-                />
+              <Ionicons
+                name={
+                  canCompleteActiveStep
+                    ? 'checkmark-circle-outline'
+                    : 'lock-closed-outline'
+                }
+                size={21}
+                color="#ffffff"
+              />
 
-                <Text style={styles.completeButtonText}>
-                    {processing
-                        ? 'Guardando...'
-                        : canCompleteActiveStep
-                            ? 'Completar paso'
-                            : `Disponible en ${formatClock(
-                                completionUnlockRemainingSeconds
-                            )}`}
-                </Text>
+              <Text style={styles.completeButtonText}>
+                {processing
+                  ? 'Guardando...'
+                  : !clockReady
+                    ? 'Sincronizando...'
+                    : canCompleteActiveStep
+                      ? 'Completar paso'
+                      : `Disponible en ${formatClock(
+                          completionUnlockRemainingSeconds
+                        )}`}
+              </Text>
             </Pressable>
 
             <Pressable
               style={styles.skipButton}
-              onPress={() =>
-                void finishActiveStep('skipped')
-              }
-              disabled={processing}
+              onPress={() => void finishActiveStep('skipped')}
+              disabled={processing || !clockReady}
             >
               <Text style={styles.skipButtonText}>
                 Saltar este paso
@@ -833,15 +1325,11 @@ export default function WorkoutScreen() {
             {restRemainingSeconds > 0 ? (
               <Pressable
                 style={styles.secondaryAction}
-                onPress={() =>
-                  void activateCurrentStep()
-                }
-                disabled={activating}
+                onPress={() => void activateCurrentStep()}
+                disabled={activating || !clockReady}
               >
                 <Text style={styles.secondaryActionText}>
-                  {activating
-                    ? 'Preparando...'
-                    : 'Saltar descanso'}
+                  {activating ? 'Preparando...' : 'Saltar descanso'}
                 </Text>
               </Pressable>
             ) : (
@@ -859,11 +1347,9 @@ export default function WorkoutScreen() {
             <Pressable
               style={styles.primaryAction}
               onPress={() => void activateCurrentStep()}
-              disabled={activating}
+              disabled={activating || !clockReady}
             >
-              <Text style={styles.primaryActionText}>
-                Continuar
-              </Text>
+              <Text style={styles.primaryActionText}>Continuar</Text>
             </Pressable>
           </View>
         )}
@@ -879,7 +1365,8 @@ export default function WorkoutScreen() {
         </Pressable>
 
         <Text style={styles.resumeHint}>
-          Puedes volver atrás y continuar esta sesión más tarde.
+          Al salir de esta pantalla, el temporizador se pausa
+          automáticamente.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -964,6 +1451,23 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#16a34a',
   },
+  syncCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    borderRadius: 13,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  syncText: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   exerciseCard: {
     backgroundColor: '#ffffff',
     borderRadius: 20,
@@ -1040,6 +1544,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 4,
   },
+  minimumTimeMessage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 12,
+  },
+  minimumTimeMessageReady: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#86efac',
+  },
+  minimumTimeText: {
+    flex: 1,
+    color: '#92400e',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  minimumTimeTextReady: {
+    color: '#166534',
+  },
   machineButton: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -1065,6 +1595,9 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 16,
     marginTop: 14,
+  },
+  completeButtonLocked: {
+    backgroundColor: '#9ca3af',
   },
   completeButtonText: {
     color: '#ffffff',
@@ -1181,9 +1714,6 @@ const styles = StyleSheet.create({
     color: '#166534',
     fontWeight: '800',
   },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
   errorTitle: {
     fontSize: 21,
     fontWeight: '800',
@@ -1255,10 +1785,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
   },
-  summaryMessage: {
+  rewardCard: {
     width: '100%',
     flexDirection: 'row',
-    gap: 10,
+    alignItems: 'center',
+    gap: 12,
     backgroundColor: '#dcfce7',
     borderWidth: 1,
     borderColor: '#86efac',
@@ -1266,91 +1797,46 @@ const styles = StyleSheet.create({
     padding: 16,
     marginTop: 18,
   },
-  summaryMessageText: {
-    flex: 1,
+  rewardIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#16a34a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rewardTitle: {
+    color: '#166534',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  rewardText: {
     color: '#166534',
     lineHeight: 20,
     fontSize: 14,
+    marginTop: 3,
   },
-    minimumTimeMessage: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 7,
-        backgroundColor: '#fef3c7',
-        borderWidth: 1,
-        borderColor: '#fcd34d',
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        marginTop: 12,
-    },
-    minimumTimeText: {
-        flex: 1,
-        color: '#92400e',
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    minimumTimeTextReady: {
-        color: '#166534',
-    },
-    completeButtonLocked: {
-        backgroundColor: '#9ca3af',
-    },
-    rewardCard: {
-  width: '100%',
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 12,
-  backgroundColor: '#dcfce7',
-  borderWidth: 1,
-  borderColor: '#86efac',
-  borderRadius: 16,
-  padding: 16,
-  marginTop: 18,
-},
-rewardIcon: {
-  width: 46,
-  height: 46,
-  borderRadius: 23,
-  backgroundColor: '#16a34a',
-  alignItems: 'center',
-  justifyContent: 'center',
-},
-rewardTitle: {
-  color: '#166534',
-  fontSize: 22,
-  fontWeight: '900',
-},
-rewardText: {
-  color: '#166534',
-  lineHeight: 20,
-  fontSize: 14,
-  marginTop: 3,
-},
-noRewardCard: {
-  width: '100%',
-  flexDirection: 'row',
-  alignItems: 'flex-start',
-  gap: 10,
-  backgroundColor: '#fef3c7',
-  borderWidth: 1,
-  borderColor: '#fcd34d',
-  borderRadius: 16,
-  padding: 16,
-  marginTop: 18,
-},
-noRewardTitle: {
-  color: '#92400e',
-  fontSize: 16,
-  fontWeight: '800',
-},
-noRewardText: {
-  color: '#92400e',
-  lineHeight: 20,
-  fontSize: 14,
-  marginTop: 3,
-},
-    
-
+  noRewardCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 18,
+  },
+  noRewardTitle: {
+    color: '#92400e',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  noRewardText: {
+    color: '#92400e',
+    lineHeight: 20,
+    fontSize: 14,
+    marginTop: 3,
+  },
 })
