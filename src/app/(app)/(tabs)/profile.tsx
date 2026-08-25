@@ -1131,6 +1131,47 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+
+
+
+        <Pressable
+          style={styles.historyCard}
+          onPress={() =>
+            router.push('/historial')
+          }
+        >
+          <View style={styles.historyIcon}>
+            <Ionicons
+              name="calendar-outline"
+              size={25}
+              color="#166534"
+            />
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.historyEyebrow}>
+              Actividad
+            </Text>
+
+            <Text style={styles.historyTitle}>
+              Historial de entrenamientos
+            </Text>
+
+            <Text style={styles.historyDescription}>
+              Revisa tus rutinas, pasos, duración y XP.
+            </Text>
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={22}
+            color="#16a34a"
+          />
+        </Pressable>
+
+
+
+
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>
             Plazas favoritas
@@ -1687,5 +1728,50 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#16a34a',
     borderRadius: 999,
+  },
+  historyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+
+    backgroundColor: '#ffffff',
+
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    borderRadius: 18,
+
+    padding: 17,
+  },
+
+  historyIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+
+    backgroundColor: '#dcfce7',
+
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  historyEyebrow: {
+    color: '#16a34a',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+
+  historyTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+
+  historyDescription: {
+    color: '#6b7280',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
   },
 })

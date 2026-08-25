@@ -42,6 +42,33 @@ export default function AppLayout() {
         }}
       />
 
+
+      <Stack.Screen
+        name="historial/index"
+        options={{
+          headerShown: true,
+          title: 'Historial',
+          headerTintColor: '#166534',
+          headerStyle: {
+            backgroundColor: '#f0fdf4',
+          },
+          headerShadowVisible: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="historial/[id]"
+        options={{
+          headerShown: true,
+          title: 'Detalle del entrenamiento',
+          headerTintColor: '#166534',
+          headerStyle: {
+            backgroundColor: '#f0fdf4',
+          },
+          headerShadowVisible: false,
+        }}
+      />
+
     </Stack>
   )
 }
