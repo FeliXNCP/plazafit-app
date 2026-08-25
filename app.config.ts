@@ -60,6 +60,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         cameraPermission: 'PlazaFit necesita acceso a la cámara para escanear códigos QR de máquinas.',
       },
     ],
+    [
+      'expo-audio',
+      {
+        microphonePermission: false,
+        recordAudioAndroid: false,
+        enableBackgroundPlayback: false,
+      }
+    ],
+    [
+      'expo-asset',
+    ],
   ],
 
   experiments: {

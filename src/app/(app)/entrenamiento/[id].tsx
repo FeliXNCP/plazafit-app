@@ -26,6 +26,12 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../../../lib/supabase'
 import type { Database } from '../../../types/database.types'
 
+import {
+  AchievementUnlockBanner,
+  type AchievementUnlockNotice,
+} from '../../../components/gamification/AchievementUnlockBanner'
+
+
 type WorkoutSession = Pick<
   Database['public']['Tables']['workout_sessions']['Row'],
   | 'id'
@@ -77,6 +83,127 @@ type FinishWorkoutStepResult = {
   rest_seconds?: number
 }
 
+type PostWorkoutMissionReward = {
+  id: string
+  code: string
+  title: string
+  description: string
+  xp_reward: number
+  icon_name: string
+  completed_at: string
+}
+
+type PostWorkoutAchievementReward = {
+  id: number
+  code: string
+  name: string
+  description: string
+  xp_reward: number
+  icon_name: string
+  unlocked_at: string
+}
+
+type PostWorkoutRewards = {
+  session_id: string
+
+  reward_eligible: boolean
+  is_replay: boolean
+
+  base_xp: number
+  mission_xp: number
+  achievement_xp: number
+  total_xp_awarded: number
+  total_xp: number
+
+  completed_missions:
+    PostWorkoutMissionReward[]
+
+  unlocked_achievements:
+    PostWorkoutAchievementReward[]
+
+  previous_level: number
+  previous_level_name: string
+
+  current_level: number
+  current_level_name: string
+
+  level_up: boolean
+  evaluated_at: string
+}
+
+function normalizePostWorkoutRewards(
+  value: unknown
+): PostWorkoutRewards {
+  const raw =
+    (value ?? {}) as Partial<PostWorkoutRewards>
+
+  return {
+    session_id:
+      String(raw.session_id ?? ''),
+
+    reward_eligible:
+      Boolean(raw.reward_eligible),
+
+    is_replay:
+      Boolean(raw.is_replay),
+
+    base_xp:
+      Number(raw.base_xp ?? 0),
+
+    mission_xp:
+      Number(raw.mission_xp ?? 0),
+
+    achievement_xp:
+      Number(raw.achievement_xp ?? 0),
+
+    total_xp_awarded:
+      Number(
+        raw.total_xp_awarded ?? 0
+      ),
+
+    total_xp:
+      Number(raw.total_xp ?? 0),
+
+    completed_missions:
+      Array.isArray(
+        raw.completed_missions
+      )
+        ? raw.completed_missions
+        : [],
+
+    unlocked_achievements:
+      Array.isArray(
+        raw.unlocked_achievements
+      )
+        ? raw.unlocked_achievements
+        : [],
+
+    previous_level:
+      Number(raw.previous_level ?? 1),
+
+    previous_level_name:
+      String(
+        raw.previous_level_name ??
+          'Inicio'
+      ),
+
+    current_level:
+      Number(raw.current_level ?? 1),
+
+    current_level_name:
+      String(
+        raw.current_level_name ??
+          'Inicio'
+      ),
+
+    level_up:
+      Boolean(raw.level_up),
+
+    evaluated_at:
+      String(raw.evaluated_at ?? ''),
+  }
+}
+
 function formatClock(totalSeconds: number) {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds))
   const minutes = Math.floor(safeSeconds / 60)
@@ -117,6 +244,8 @@ function getServerRemainingSeconds(error: unknown): number | null {
   }
 }
 
+
+//COMPONENTE
 export default function WorkoutScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
 
@@ -147,6 +276,46 @@ export default function WorkoutScreen() {
   const lifecycleGenerationRef = useRef(0)
   const lifecycleQueueRef = useRef<Promise<void>>(Promise.resolve())
 
+
+  const [
+    achievementQueue,
+    setAchievementQueue,
+  ] = useState<AchievementUnlockNotice[]>([])
+
+  const visibleAchievement =
+    achievementQueue[0] ?? null
+
+  const dismissVisibleAchievement =
+    useCallback(() => {
+      setAchievementQueue(
+        (current) =>
+          current.slice(1)
+      )
+    }, [])
+
+
+
+
+  const [
+    postWorkoutRewards,
+    setPostWorkoutRewards,
+  ] = useState<PostWorkoutRewards | null>(
+    null
+  )
+
+  const [
+    loadingPostRewards,
+    setLoadingPostRewards,
+  ] = useState(false)
+
+  const [
+    postRewardsError,
+    setPostRewardsError,
+  ] = useState<string | null>(null)
+
+  const postRewardSessionRef =
+    useRef<string | null>(null)
+
   const enqueueLifecycleTask = useCallback(
     (task: () => Promise<void>) => {
       const next = lifecycleQueueRef.current.then(
@@ -162,6 +331,97 @@ export default function WorkoutScreen() {
     },
     []
   )
+
+
+
+
+  const loadPostWorkoutRewards =
+    useCallback(
+      async (
+        sessionId: string,
+        force = false
+      ) => {
+        if (
+          !force &&
+          postRewardSessionRef.current ===
+          sessionId
+        ) {
+          return
+        }
+
+        postRewardSessionRef.current =
+          sessionId
+
+        try {
+          setLoadingPostRewards(true)
+          setPostRewardsError(null)
+
+          const { data, error } =
+            await supabase.rpc(
+              'evaluate_post_workout_rewards',
+              {
+                p_session_id: sessionId,
+              }
+            )
+
+          if (error) throw error
+
+          const result =
+            normalizePostWorkoutRewards(
+              data
+            )
+
+          setPostWorkoutRewards(result)
+
+          /*
+           * El banner solo aparece durante
+           * la primera evaluación.
+           */
+          if (
+            !result.is_replay &&
+            result
+              .unlocked_achievements
+              .length > 0
+          ) {
+            setAchievementQueue(
+              result
+                .unlocked_achievements
+                .map((achievement) => ({
+                  id: achievement.id,
+
+                  name: achievement.name,
+
+                  description:
+                    achievement.description,
+
+                  xpReward:
+                    achievement.xp_reward,
+
+                  iconName:
+                    achievement.icon_name as
+                    AchievementUnlockNotice[
+                    'iconName'
+                    ],
+                }))
+            )
+          }
+        } catch (error: any) {
+          setPostRewardsError(
+            error.message ??
+            'No se pudieron calcular las recompensas.'
+          )
+        } finally {
+          setLoadingPostRewards(false)
+        }
+      },
+      []
+    )
+
+
+
+
+
+
 
   const fetchWorkout = useCallback(
     async (): Promise<LoadedWorkout | null> => {
@@ -504,6 +764,38 @@ export default function WorkoutScreen() {
 
     return () => subscription.remove()
   }, [requestPause, requestResume])
+
+
+
+
+
+
+  useEffect(() => {
+    if (
+      session?.status !== 'completed'
+    ) {
+      return
+    }
+
+    if (
+      postWorkoutRewards ||
+      loadingPostRewards
+    ) {
+      return
+    }
+
+    void loadPostWorkoutRewards(
+      session.id
+    )
+  }, [
+    loadPostWorkoutRewards,
+    loadingPostRewards,
+    postWorkoutRewards,
+    session?.id,
+    session?.status,
+  ])
+
+
 
   const clockIsRunning =
     screenIsFocused && appIsActive && clockReady
@@ -969,6 +1261,13 @@ export default function WorkoutScreen() {
 
     return (
       <SafeAreaView style={styles.screen}>
+        <AchievementUnlockBanner
+          achievement={visibleAchievement}
+          onDismiss={
+            dismissVisibleAchievement
+          }
+        />
+
         <ScrollView contentContainerStyle={styles.summaryContainer}>
           <View style={styles.summaryIcon}>
             <Ionicons name="checkmark" size={52} color="#ffffff" />
@@ -1009,46 +1308,224 @@ export default function WorkoutScreen() {
             </View>
           </View>
 
-          {session.reward_eligible ? (
-            <View style={styles.rewardCard}>
-              <View style={styles.rewardIcon}>
-                <Ionicons name="sparkles" size={24} color="#ffffff" />
-              </View>
+
+          {loadingPostRewards ? (
+            <View style={styles.calculatingRewardsCard}>
+              <ActivityIndicator
+                size="small"
+                color="#166534"
+              />
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.rewardTitle}>
-                  +{session.xp_awarded} XP
+                <Text style={styles.calculatingRewardsTitle}>
+                  Calculando recompensas
                 </Text>
 
-                <Text style={styles.rewardText}>
-                  Completaste {session.completed_steps} de{' '}
-                  {session.total_steps} pasos y alcanzaste{' '}
-                  {Math.round(Number(session.completion_percentage ?? 0))}%
-                  de la rutina.
+                <Text style={styles.calculatingRewardsText}>
+                  Revisando XP, misiones y logros...
                 </Text>
               </View>
             </View>
-          ) : (
-            <View style={styles.noRewardCard}>
+          ) : postRewardsError ? (
+            <View style={styles.rewardErrorCard}>
               <Ionicons
-                name="information-circle-outline"
+                name="alert-circle-outline"
                 size={24}
                 color="#92400e"
               />
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.noRewardTitle}>
-                  Sesión guardada sin XP
+                <Text style={styles.rewardErrorTitle}>
+                  Recompensas pendientes
                 </Text>
 
-                <Text style={styles.noRewardText}>
-                  Completaste {session.completed_steps} de{' '}
-                  {session.total_steps} pasos. Necesitas completar al
-                  menos el 75 % para recibir la recompensa.
+                <Text style={styles.rewardErrorText}>
+                  {postRewardsError}
                 </Text>
+
+                <Pressable
+                  style={styles.retryRewardsButton}
+                  onPress={() => {
+                    postRewardSessionRef.current =
+                      null
+
+                    void loadPostWorkoutRewards(
+                      session.id,
+                      true
+                    )
+                  }}
+                >
+                  <Text style={styles.retryRewardsText}>
+                    Reintentar
+                  </Text>
+                </Pressable>
               </View>
             </View>
-          )}
+          ) : postWorkoutRewards ? (
+            postWorkoutRewards.reward_eligible ? (
+              <>
+                <View style={styles.rewardBreakdownCard}>
+                  <Text style={styles.rewardBreakdownTitle}>
+                    Recompensas obtenidas
+                  </Text>
+
+                  {postWorkoutRewards.base_xp > 0 ? (
+                    <View style={styles.rewardRow}>
+                      <View style={styles.rewardRowIcon}>
+                        <Ionicons
+                          name="fitness-outline"
+                          size={18}
+                          color="#166534"
+                        />
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.rewardRowTitle}>
+                          Entrenamiento válido
+                        </Text>
+
+                        <Text style={styles.rewardRowSubtitle}>
+                          Rutina completada
+                        </Text>
+                      </View>
+
+                      <Text style={styles.rewardRowXp}>
+                        +{postWorkoutRewards.base_xp} XP
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {postWorkoutRewards
+                    .completed_missions
+                    .map((mission) => (
+                      <View
+                        key={mission.id}
+                        style={styles.rewardRow}
+                      >
+                        <View style={styles.rewardRowIcon}>
+                          <Ionicons
+                            name="flag-outline"
+                            size={18}
+                            color="#166534"
+                          />
+                        </View>
+
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.rewardRowTitle}>
+                            {mission.title}
+                          </Text>
+
+                          <Text style={styles.rewardRowSubtitle}>
+                            Misión semanal
+                          </Text>
+                        </View>
+
+                        <Text style={styles.rewardRowXp}>
+                          +{mission.xp_reward} XP
+                        </Text>
+                      </View>
+                    ))}
+
+                  {postWorkoutRewards
+                    .unlocked_achievements
+                    .map((achievement) => (
+                      <View
+                        key={achievement.id}
+                        style={styles.rewardRow}
+                      >
+                        <View style={styles.rewardRowIcon}>
+                          <Ionicons
+                            name="trophy-outline"
+                            size={18}
+                            color="#166534"
+                          />
+                        </View>
+
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.rewardRowTitle}>
+                            {achievement.name}
+                          </Text>
+
+                          <Text style={styles.rewardRowSubtitle}>
+                            Logro desbloqueado
+                          </Text>
+                        </View>
+
+                        <Text style={styles.rewardRowXp}>
+                          +{achievement.xp_reward} XP
+                        </Text>
+                      </View>
+                    ))}
+
+                  <View style={styles.rewardTotalRow}>
+                    <Text style={styles.rewardTotalLabel}>
+                      Total obtenido
+                    </Text>
+
+                    <Text style={styles.rewardTotalValue}>
+                      +{postWorkoutRewards.total_xp_awarded} XP
+                    </Text>
+                  </View>
+
+                  <Text style={styles.currentXpText}>
+                    XP acumulado: {postWorkoutRewards.total_xp}
+                  </Text>
+                </View>
+
+                {postWorkoutRewards.level_up ? (
+                  <View style={styles.levelUpCard}>
+                    <View style={styles.levelUpIcon}>
+                      <Ionicons
+                        name="arrow-up"
+                        size={25}
+                        color="#ffffff"
+                      />
+                    </View>
+
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.levelUpEyebrow}>
+                        Subiste de nivel
+                      </Text>
+
+                      <Text style={styles.levelUpTitle}>
+                        Nivel {postWorkoutRewards.current_level}
+                        {' · '}
+                        {postWorkoutRewards.current_level_name}
+                      </Text>
+
+                      <Text style={styles.levelUpText}>
+                        Venías desde Nivel{' '}
+                        {postWorkoutRewards.previous_level}
+                        {' · '}
+                        {postWorkoutRewards.previous_level_name}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+              </>
+            ) : (
+              <View style={styles.noRewardCard}>
+                <Ionicons
+                  name="information-circle-outline"
+                  size={24}
+                  color="#92400e"
+                />
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noRewardTitle}>
+                    Sesión guardada sin XP
+                  </Text>
+
+                  <Text style={styles.noRewardText}>
+                    Necesitas completar al menos el 75 %
+                    de los pasos para recibir recompensas.
+                  </Text>
+                </View>
+              </View>
+            )
+          ) : null}
+
+
 
           <Pressable
             style={styles.primaryAction}
@@ -1838,5 +2315,193 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontSize: 14,
     marginTop: 3,
+  },
+  calculatingRewardsCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 18,
+  },
+
+  calculatingRewardsTitle: {
+    color: '#166534',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  calculatingRewardsText: {
+    color: '#166534',
+    fontSize: 13,
+    marginTop: 3,
+  },
+
+  rewardErrorCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 18,
+  },
+
+  rewardErrorTitle: {
+    color: '#92400e',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  rewardErrorText: {
+    color: '#92400e',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 3,
+  },
+
+  retryRewardsButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 10,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    marginTop: 10,
+  },
+
+  retryRewardsText: {
+    color: '#92400e',
+    fontWeight: '800',
+  },
+
+  rewardBreakdownCard: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 18,
+    padding: 16,
+    marginTop: 18,
+  },
+
+  rewardBreakdownTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '900',
+    marginBottom: 7,
+  },
+
+  rewardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 11,
+    borderTopWidth: 1,
+    borderTopColor: '#ecfdf5',
+  },
+
+  rewardRowIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  rewardRowTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  rewardRowSubtitle: {
+    color: '#6b7280',
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  rewardRowXp: {
+    color: '#16a34a',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+
+  rewardTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#86efac',
+    paddingTop: 14,
+    marginTop: 5,
+  },
+
+  rewardTotalLabel: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+
+  rewardTotalValue: {
+    color: '#16a34a',
+    fontSize: 21,
+    fontWeight: '900',
+  },
+
+  currentXpText: {
+    color: '#6b7280',
+    fontSize: 12,
+    textAlign: 'right',
+    marginTop: 5,
+  },
+
+  levelUpCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 13,
+    backgroundColor: '#166534',
+    borderRadius: 18,
+    padding: 17,
+    marginTop: 13,
+  },
+
+  levelUpIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#16a34a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  levelUpEyebrow: {
+    color: '#86efac',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+
+  levelUpTitle: {
+    color: '#ffffff',
+    fontSize: 19,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+
+  levelUpText: {
+    color: '#dcfce7',
+    fontSize: 12,
+    marginTop: 4,
   },
 })
