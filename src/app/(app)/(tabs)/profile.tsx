@@ -18,6 +18,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../../../lib/supabase'
 import { useSession } from '../../../providers/session-provider'
 
+
+//TIPOS
 type PlazaRelation = {
   id?: number
   nombre: string
@@ -121,6 +123,29 @@ type AchievementEvaluationResult = {
     NewlyUnlockedAchievement[]
 }
 
+type NewlyCompletedMission = {
+  id: string
+  code: string
+  title: string
+  description: string
+  xp_reward: number
+  icon_name: string
+  completed_at: string
+}
+
+type WeeklyMissionEvaluationResult = {
+  summary: {
+    total: number
+    completed: number
+  }
+
+  newly_completed:
+    NewlyCompletedMission[]
+}
+
+
+
+//FUNCIONES FUERA DEL COMPONENTE
 const EMPTY_GAMIFICATION: GamificationSummary = {
   totalXp: 0,
   currentLevel: 1,
@@ -270,6 +295,9 @@ function normalizeGamificationSummary(
   }
 }
 
+
+
+//COMPONENTE PROFILE SCREEN
 export default function ProfileScreen() {
   const { session } = useSession()
 
@@ -302,6 +330,18 @@ export default function ProfileScreen() {
       unlocked: 0,
     })
 
+
+
+  const [
+    missionOverview,
+    setMissionOverview,
+  ] = useState({
+    total: 0,
+    completed: 0,
+  })
+
+
+
   const [updatingWeeklyGoal, setUpdatingWeeklyGoal] =
     useState<number | null>(null)
 
@@ -316,8 +356,29 @@ export default function ProfileScreen() {
           setRefreshing(true)
         }
 
+//EVALUADOR DE MISIONES SEMANALES
+        const {
+          data: missionData,
+          error: missionError,
+        } = await supabase.rpc(
+          'evaluate_my_weekly_missions'
+        )
+
+        if (missionError) {
+          throw missionError
+        }
+
+        const missionEvaluation =
+          (missionData ?? {
+            summary: {
+              total: 0,
+              completed: 0,
+            },
+            newly_completed: [],
+          }) as WeeklyMissionEvaluationResult
+
         /*
-         * Primero evaluamos los logros.
+         * evaluamos los logros.
          * Este RPC puede entregar XP nuevo.
          */
         const {
@@ -339,6 +400,9 @@ export default function ProfileScreen() {
             },
             newly_unlocked: [],
           }) as AchievementEvaluationResult
+
+
+ 
 
         /*
          * Después consultamos el resumen.
@@ -443,31 +507,52 @@ export default function ProfileScreen() {
           ),
         })
 
+        //ACTUALIZAR ESTADO MISIONES
+        setMissionOverview({
+          total: Number(
+            missionEvaluation.summary?.total ?? 0
+          ),
+
+          completed: Number(
+            missionEvaluation.summary?.completed ?? 0
+          ),
+        })
+
+
+
         /*
-         * La alerta se muestra al final.
+         * ALERTA DE LOGROS Y MISIONES
          */
-        const newlyUnlocked =
+        const newlyCompletedMissions =
           Array.isArray(
-            achievementEvaluation
-              .newly_unlocked
+            missionEvaluation.newly_completed
           )
-            ? achievementEvaluation
-              .newly_unlocked
+            ? missionEvaluation.newly_completed
             : []
 
-        if (newlyUnlocked.length > 0) {
-          const message = newlyUnlocked
-            .map(
-              (achievement) =>
-                `${achievement.name} (+${achievement.xp_reward} XP)`
-            )
-            .join('\n')
+        const newlyUnlockedAchievements =
+          Array.isArray(
+            achievementEvaluation.newly_unlocked
+          )
+            ? achievementEvaluation.newly_unlocked
+            : []
 
+        const rewardMessages = [
+          ...newlyCompletedMissions.map(
+            (mission) =>
+              `${mission.title} (+${mission.xp_reward} XP)`
+          ),
+
+          ...newlyUnlockedAchievements.map(
+            (achievement) =>
+              `${achievement.name} (+${achievement.xp_reward} XP)`
+          ),
+        ]
+
+        if (rewardMessages.length > 0) {
           Alert.alert(
-            newlyUnlocked.length === 1
-              ? '¡Logro desbloqueado!'
-              : '¡Nuevos logros!',
-            message
+            '¡Recompensas desbloqueadas!',
+            rewardMessages.join('\n')
           )
         }
       } catch (error: any) {
@@ -560,6 +645,26 @@ export default function ProfileScreen() {
   const weeklyProgressWidth = toPercentageWidth(
     gamification.weeklyProgress
   )
+
+  //TARJETA RESUMIDA DEBAJO DEL OBJETIVO SEMANAL
+  const missionProgress =
+    missionOverview.total > 0
+      ? (
+        missionOverview.completed /
+        missionOverview.total
+      ) * 100
+      : 0
+
+  const missionProgressWidth =
+    `${Math.min(
+      100,
+      Math.max(0, missionProgress)
+    )}%` as `${number}%`
+
+
+
+
+
 
   const achievementProgressWidth =
     toPercentageWidth(
@@ -847,9 +952,46 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+        <Pressable
+          style={styles.missionsCard}
+          onPress={() => router.push('/misiones')}
+        >
+          <View style={styles.missionsIcon}>
+            <Ionicons
+              name="flag-outline"
+              size={25}
+              color="#166534"
+            />
+          </View>
 
+          <View style={{ flex: 1 }}>
+            <Text style={styles.missionsEyebrow}>
+              Misiones de esta semana
+            </Text>
 
+            <Text style={styles.missionsTitle}>
+              {missionOverview.completed} de{' '}
+              {missionOverview.total} completadas
+            </Text>
 
+            <View style={styles.missionsTrack}>
+              <View
+                style={[
+                  styles.missionsFill,
+                  {
+                    width: missionProgressWidth,
+                  },
+                ]}
+              />
+            </View>
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={22}
+            color="#16a34a"
+          />
+        </Pressable>
 
 
 
@@ -1500,6 +1642,48 @@ const styles = StyleSheet.create({
     marginTop: 9,
   },
   achievementsFill: {
+    height: '100%',
+    backgroundColor: '#16a34a',
+    borderRadius: 999,
+  },
+  missionsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    borderRadius: 18,
+    padding: 17,
+  },
+  missionsIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  missionsEyebrow: {
+    color: '#16a34a',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  missionsTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  missionsTrack: {
+    height: 7,
+    backgroundColor: '#dcfce7',
+    borderRadius: 999,
+    overflow: 'hidden',
+    marginTop: 9,
+  },
+  missionsFill: {
     height: '100%',
     backgroundColor: '#16a34a',
     borderRadius: 999,

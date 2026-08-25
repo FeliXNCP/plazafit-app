@@ -29,6 +29,19 @@ export default function AppLayout() {
         }}
       />
 
+      <Stack.Screen
+        name="misiones"
+        options={{
+          headerShown: true,
+          title: 'Misiones semanales',
+          headerTintColor: '#166534',
+          headerStyle: {
+            backgroundColor: '#f0fdf4',
+          },
+          headerShadowVisible: false,
+        }}
+      />
+
     </Stack>
   )
 }
