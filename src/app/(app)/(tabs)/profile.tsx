@@ -18,6 +18,10 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../../../lib/supabase'
 import { useSession } from '../../../providers/session-provider'
 
+import {
+  cancelWorkoutReminders,
+} from '../../../services/notifications/workout-reminder-service'
+
 
 //TIPOS
 type PlazaRelation = {
@@ -576,11 +580,25 @@ export default function ProfileScreen() {
   )
 
   async function handleLogout() {
-    const { error } =
-      await supabase.auth.signOut()
+    try {
+      if (session?.user?.id) {
+        await cancelWorkoutReminders(
+          session.user.id
+        )
+      }
 
-    if (error) {
-      Alert.alert('Error', error.message)
+      const { error } =
+        await supabase.auth.signOut()
+
+      if (error) {
+        throw error
+      }
+    } catch (error: any) {
+      Alert.alert(
+        'Error',
+        error.message ??
+        'No se pudo cerrar la sesión.'
+      )
     }
   }
 
@@ -1159,6 +1177,45 @@ export default function ProfileScreen() {
 
             <Text style={styles.historyDescription}>
               Revisa tus rutinas, pasos, duración y XP.
+            </Text>
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={22}
+            color="#16a34a"
+          />
+        </Pressable>
+
+
+
+
+
+        <Pressable
+          style={styles.remindersCard}
+          onPress={() =>
+            router.push('/recordatorios')
+          }
+        >
+          <View style={styles.remindersIcon}>
+            <Ionicons
+              name="notifications-outline"
+              size={25}
+              color="#166534"
+            />
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.remindersEyebrow}>
+              Constancia
+            </Text>
+
+            <Text style={styles.remindersTitle}>
+              Recordatorios de entrenamiento
+            </Text>
+
+            <Text style={styles.remindersDescription}>
+              Elige tus días y hora para entrenar.
             </Text>
           </View>
 
@@ -1769,6 +1826,47 @@ const styles = StyleSheet.create({
   },
 
   historyDescription: {
+    color: '#6b7280',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  remindersCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    borderRadius: 18,
+    padding: 17,
+  },
+
+  remindersIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  remindersEyebrow: {
+    color: '#16a34a',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+
+  remindersTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+
+  remindersDescription: {
     color: '#6b7280',
     fontSize: 12,
     lineHeight: 17,

@@ -2,9 +2,14 @@ import { Stack } from 'expo-router'
 import { ActivityIndicator, View } from 'react-native'
 import { SessionProvider, useSession } from '../providers/session-provider'
 
+import {
+  useNotificationNavigation,
+} from '../hooks/use-notification-navigation'
+
 function RootNavigator() {
   const { session, loading } = useSession()
 
+  
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -27,6 +32,8 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  useNotificationNavigation()
+  
   return (
     <SessionProvider>
       <RootNavigator />

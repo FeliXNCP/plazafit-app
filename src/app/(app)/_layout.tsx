@@ -1,6 +1,22 @@
 import { Stack } from 'expo-router'
 
+import {
+  useWorkoutReminderSync,
+} from '../../hooks/use-workout-reminder-sync'
+
+import {
+  useSession,
+} from '../../providers/session-provider'
+
+
+
 export default function AppLayout() {
+    const { session } = useSession()
+
+  useWorkoutReminderSync(
+    session?.user?.id
+  )
+
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(tabs)" />
@@ -68,6 +84,19 @@ export default function AppLayout() {
           headerShadowVisible: false,
         }}
       />
+
+      <Stack.Screen
+        name="recordatorios"
+        options={{
+          headerShown: true,
+          title: 'Recordatorios',
+          headerTintColor: '#166534',
+          headerStyle: {
+            backgroundColor: '#f0fdf4',
+          },
+          headerShadowVisible: false,
+        }}
+/>
 
     </Stack>
   )

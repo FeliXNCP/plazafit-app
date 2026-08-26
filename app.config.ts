@@ -27,7 +27,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       monochromeImage: './assets/images/android-icon-monochrome.png',
     },
     predictiveBackGestureEnabled: false,
-    permissions: ['ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION'],
+    permissions: [
+      'ACCESS_COARSE_LOCATION',
+      'ACCESS_FINE_LOCATION',
+      'SCHEDULE_EXACT_ALARM',
+    ],
   },
 
   web: {
@@ -70,6 +74,19 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ],
     [
       'expo-asset',
+    ],
+    [
+      '@react-native-community/datetimepicker',
+    ],
+    [
+      'expo-web-browser',
+    ],
+    [
+      'expo-notifications',
+      {
+        color: '#16a34a',
+        defaultChannel: 'workout-reminders',
+      },
     ],
   ],
 
