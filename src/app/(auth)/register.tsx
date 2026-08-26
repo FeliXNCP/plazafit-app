@@ -14,6 +14,9 @@ import {
 } from 'react-native'
 import { supabase } from '../../lib/supabase'
 
+import { PasswordInput } from '../../components/auth/PasswordInput'
+
+
 export default function RegisterScreen() {
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
@@ -101,22 +104,27 @@ export default function RegisterScreen() {
             placeholderTextColor="#6b7280"
           />
 
-          <TextInput
+          <PasswordInput
             placeholder="Contraseña"
-            secureTextEntry
-            style={styles.input}
             value={password}
             onChangeText={setPassword}
-            placeholderTextColor="#6b7280"
+            editable={!loading}
+            autoComplete="new-password"
+            textContentType="newPassword"
+            returnKeyType="next"
           />
 
-          <TextInput
+          <PasswordInput
             placeholder="Confirmar contraseña"
-            secureTextEntry
-            style={styles.input}
             value={confirmPassword}
             onChangeText={setConfirmPassword}
-            placeholderTextColor="#6b7280"
+            editable={!loading}
+            autoComplete="new-password"
+            textContentType="newPassword"
+            returnKeyType="done"
+            onSubmitEditing={() => {
+              void handleRegister()
+            }}
           />
 
           <Pressable style={styles.button} onPress={handleRegister} disabled={loading}>

@@ -14,6 +14,9 @@ import {
 } from 'react-native'
 import { supabase } from '../../lib/supabase'
 
+import { router } from 'expo-router'
+import { PasswordInput } from '../../components/auth/PasswordInput'
+
 export default function LoginScreen() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -57,22 +60,44 @@ export default function LoginScreen() {
 
           <TextInput
             placeholder="Correo"
-            autoCapitalize="none"
-            keyboardType="email-address"
-            style={styles.input}
             value={email}
             onChangeText={setEmail}
+            editable={!loading}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            autoComplete="email"
+            textContentType="emailAddress"
+            returnKeyType="next"
             placeholderTextColor="#6b7280"
+            style={styles.input}
           />
 
-          <TextInput
+          <PasswordInput
             placeholder="Contraseña"
-            secureTextEntry
-            style={styles.input}
             value={password}
             onChangeText={setPassword}
-            placeholderTextColor="#6b7280"
+            editable={!loading}
+            autoComplete="current-password"
+            textContentType="password"
+            returnKeyType="done"
+            onSubmitEditing={() => {
+              void handleLogin()
+            }}
           />
+
+          <Pressable
+            style={styles.forgotPasswordButton}
+            onPress={() =>
+              router.push('/forgot-password')
+            }
+            disabled={loading}
+          >
+            <Text style={styles.forgotPasswordText}>
+              ¿Olvidaste tu contraseña?
+            </Text>
+          </Pressable>
+
 
           <Pressable style={styles.button} onPress={handleLogin} disabled={loading}>
             <Text style={styles.buttonText}>
@@ -144,5 +169,15 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: 'center',
     color: '#15803d',
+  },
+  forgotPasswordButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 5,
+  },
+
+  forgotPasswordText: {
+    color: '#15803d',
+    fontSize: 13,
+    fontWeight: '700',
   },
 })

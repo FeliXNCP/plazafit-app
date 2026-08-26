@@ -27,6 +27,18 @@ function RootNavigator() {
       <Stack.Protected guard={!!session}>
         <Stack.Screen name="(app)" />
       </Stack.Protected>
+
+
+
+      <Stack.Screen
+        name="reset-password"
+        options={{
+          headerShown: false,
+        }}
+      />
+
+
+
     </Stack>
   )
 }
