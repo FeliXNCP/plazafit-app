@@ -35,9 +35,39 @@ const INITIAL_REGION = {
   longitudeDelta: 0.08,
 }
 
-
-
-const GREEN_MAP_STYLE = [
+const PLAZAFIT_LIGHT_MAP_STYLE = [
+  {
+    elementType: 'geometry',
+    stylers: [{ color: '#f7faf7' }],
+  },
+  {
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#4b5563' }],
+  },
+  {
+    elementType: 'labels.text.stroke',
+    stylers: [{ color: '#ffffff' }],
+  },
+  {
+    featureType: 'road',
+    elementType: 'geometry',
+    stylers: [{ color: '#ffffff' }],
+  },
+  {
+    featureType: 'road',
+    elementType: 'geometry.stroke',
+    stylers: [{ color: '#d1d5db' }],
+  },
+  {
+    featureType: 'road.highway',
+    elementType: 'geometry',
+    stylers: [{ color: '#e5e7eb' }],
+  },
+  {
+    featureType: 'landscape',
+    elementType: 'geometry',
+    stylers: [{ color: '#f0fdf4' }],
+  },
   {
     featureType: 'poi',
     elementType: 'labels',
@@ -48,24 +78,18 @@ const GREEN_MAP_STYLE = [
     stylers: [{ visibility: 'off' }],
   },
   {
-    featureType: 'transit',
-    elementType: 'labels.icon',
-    stylers: [{ visibility: 'off' }],
-  },
-  {
-    featureType: 'landscape',
-    elementType: 'geometry',
-    stylers: [{ color: '#e8f5e9' }],
-  },
-  {
     featureType: 'poi.park',
     elementType: 'geometry',
-    stylers: [{ color: '#c8e6c9' }],
+    stylers: [{ color: '#dcfce7' }],
+  },
+  {
+    featureType: 'transit',
+    stylers: [{ visibility: 'off' }],
   },
   {
     featureType: 'water',
     elementType: 'geometry',
-    stylers: [{ color: '#dcedc8' }],
+    stylers: [{ color: '#dbeafe' }],
   },
 ]
 
@@ -102,42 +126,37 @@ export default function MapScreen() {
     })
   }, [plazas, searchText, showOnlyFavorites])
 
+  const hasActiveFilter =
+    searchText.trim().length > 0 || showOnlyFavorites
+
   useEffect(() => {
-    if (!filteredPlazas.length) return
+    /*
+     * No ajustamos la cámara para intentar mostrar todas las plazas.
+     * Si hay marcadores muy distantes, fitToCoordinates aleja el mapa
+     * hasta mostrar incluso regiones o países completos.
+     *
+     * Solo centramos automáticamente cuando una búsqueda o el filtro
+     * de favoritas deja exactamente un resultado. En cualquier otro
+     * caso conservamos la región elegida por el usuario.
+     */
+    if (!hasActiveFilter || filteredPlazas.length !== 1) return
+
+    const [plaza] = filteredPlazas
 
     const timer = setTimeout(() => {
-      if (filteredPlazas.length === 1) {
-        mapRef.current?.animateToRegion(
-          {
-            latitude: filteredPlazas[0].lat,
-            longitude: filteredPlazas[0].lng,
-            latitudeDelta: 0.02,
-            longitudeDelta: 0.02,
-          },
-          500
-        )
-        return
-      }
-
-      mapRef.current?.fitToCoordinates(
-        filteredPlazas.map((plaza) => ({
+      mapRef.current?.animateToRegion(
+        {
           latitude: plaza.lat,
           longitude: plaza.lng,
-        })),
-        {
-          edgePadding: {
-            top: 140,
-            right: 50,
-            bottom: 180,
-            left: 50,
-          },
-          animated: true,
-        }
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        },
+        500
       )
-    }, 350)
+    }, 250)
 
     return () => clearTimeout(timer)
-  }, [filteredPlazas])
+  }, [filteredPlazas, hasActiveFilter])
 
   useEffect(() => {
     if (!selectedPlaza) return
@@ -216,7 +235,9 @@ export default function MapScreen() {
         provider={PROVIDER_GOOGLE}
         style={styles.map}
         initialRegion={INITIAL_REGION}
-        customMapStyle={GREEN_MAP_STYLE}
+        userInterfaceStyle="light"
+        mapType="standard"
+        customMapStyle={PLAZAFIT_LIGHT_MAP_STYLE}
         onPress={handleMapPress}
       >
         {filteredPlazas.map((plaza) => (
@@ -270,12 +291,12 @@ export default function MapScreen() {
             />
           </Pressable>
 
-            <Pressable
-              style={styles.refreshMapButton}
-              onPress={fetchMapData}
-            >
-              <Ionicons name="refresh-outline" size={18} color="#166534" />
-            </Pressable>
+          <Pressable
+            style={styles.refreshMapButton}
+            onPress={fetchMapData}
+          >
+            <Ionicons name="refresh-outline" size={18} color="#166534" />
+          </Pressable>
         </View>
 
         <View style={styles.resultBadge}>
