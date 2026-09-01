@@ -6,7 +6,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -336,30 +335,16 @@ export default function PlazaDetailScreen() {
     }
   }
 
-  async function handleDirections() {
+  function handleDirections() {
     if (!plaza) return
 
-    const destination = `${plaza.lat},${plaza.lng}`
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=walking`
-
-    try {
-      const supported = await Linking.canOpenURL(url)
-
-      if (!supported) {
-        Alert.alert(
-          'No se pudo abrir el mapa',
-          'No encontramos una aplicación compatible para mostrar la ruta.'
-        )
-        return
-      }
-
-      await Linking.openURL(url)
-    } catch (error: any) {
-      Alert.alert(
-        'No se pudo abrir la ruta',
-        error.message ?? 'Intenta nuevamente.'
-      )
-    }
+    router.push({
+      pathname: '/',
+      params: {
+        routeToPlazaId: String(plaza.id),
+        routeRequestId: String(Date.now()),
+      },
+    })
   }
 
 

@@ -1,140 +1,68 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
-import * as Linking from 'expo-linking'
 import { router } from 'expo-router'
 import {
-    useEffect,
-    useRef,
-    useState,
+  useEffect,
+  useState,
 } from 'react'
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { PasswordInput } from '../components/auth/PasswordInput'
+import {
+  PasswordInput,
+} from '../components/auth/PasswordInput'
 import { supabase } from '../lib/supabase'
 
-function getRecoveryParameters(
-  url: string
+function getUpdatePasswordErrorMessage(
+  message: string | undefined
 ) {
-  const parameters =
-    new URLSearchParams()
+  const normalized = message?.toLowerCase() ?? ''
 
-  const queryIndex = url.indexOf('?')
-  const hashIndex = url.indexOf('#')
-
-  if (queryIndex >= 0) {
-    const queryEnd =
-      hashIndex >= 0
-        ? hashIndex
-        : url.length
-
-    const query = url.slice(
-      queryIndex + 1,
-      queryEnd
-    )
-
-    new URLSearchParams(query).forEach(
-      (value, key) => {
-        parameters.set(key, value)
-      }
-    )
+  if (
+    normalized.includes('same password') ||
+    normalized.includes('different from the old')
+  ) {
+    return 'La contraseña nueva debe ser diferente de la anterior.'
   }
 
-  if (hashIndex >= 0) {
-    const fragment =
-      url.slice(hashIndex + 1)
-
-    new URLSearchParams(fragment).forEach(
-      (value, key) => {
-        parameters.set(key, value)
-      }
-    )
+  if (
+    normalized.includes('weak') ||
+    normalized.includes('characters')
+  ) {
+    return 'La contraseña no cumple los requisitos de seguridad.'
   }
 
-  return parameters
-}
-
-async function createRecoverySession(
-  url: string
-) {
-  const parameters =
-    getRecoveryParameters(url)
-
-  const errorDescription =
-    parameters.get('error_description')
-
-  if (errorDescription) {
-    throw new Error(errorDescription)
+  if (
+    normalized.includes('session') ||
+    normalized.includes('jwt')
+  ) {
+    return 'La sesión de recuperación expiró. Solicita un código nuevo.'
   }
 
-  /*
-   * Flujo PKCE.
-   */
-  const code = parameters.get('code')
-
-  if (code) {
-    const { error } =
-      await supabase.auth
-        .exchangeCodeForSession(code)
-
-    if (error) throw error
-
-    return
-  }
-
-  /*
-   * Flujo implicit.
-   */
-  const accessToken =
-    parameters.get('access_token')
-
-  const refreshToken =
-    parameters.get('refresh_token')
-
-  if (accessToken && refreshToken) {
-    const { error } =
-      await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      })
-
-    if (error) throw error
-
-    return
-  }
-
-  /*
-   * La sesión puede haber sido procesada
-   * previamente por Supabase.
-   */
-  const {
-    data,
-    error,
-  } = await supabase.auth.getSession()
-
-  if (error) throw error
-
-  if (!data.session) {
-    throw new Error(
-      'El enlace no contiene una sesión de recuperación válida.'
-    )
-  }
+  return (
+    message ??
+    'No se pudo actualizar la contraseña.'
+  )
 }
 
 export default function ResetPasswordScreen() {
-  const [loadingLink, setLoadingLink] =
-    useState(true)
+  const [
+    validatingSession,
+    setValidatingSession,
+  ] = useState(true)
 
-  const [linkError, setLinkError] =
-    useState<string | null>(null)
+  const [
+    sessionError,
+    setSessionError,
+  ] = useState<string | null>(null)
 
   const [password, setPassword] =
     useState('')
@@ -147,81 +75,64 @@ export default function ResetPasswordScreen() {
   const [saving, setSaving] =
     useState(false)
 
-  const processedUrl =
-    useRef<string | null>(null)
+  const [updated, setUpdated] =
+    useState(false)
 
   useEffect(() => {
     let cancelled = false
 
-    async function processUrl(
-      url: string | null
-    ) {
-      if (
-        !url ||
-        processedUrl.current === url
-      ) {
-        return
-      }
-
-      processedUrl.current = url
-
+    void (async () => {
       try {
-        setLoadingLink(true)
-        setLinkError(null)
+        setValidatingSession(true)
+        setSessionError(null)
 
-        await createRecoverySession(url)
+        const {
+          data: sessionData,
+          error: sessionErrorResult,
+        } = await supabase.auth.getSession()
 
-        if (!cancelled) {
-          setLoadingLink(false)
+        if (sessionErrorResult) {
+          throw sessionErrorResult
+        }
+
+        if (!sessionData.session) {
+          throw new Error(
+            'Primero debes validar el código enviado a tu correo.'
+          )
+        }
+
+        /*
+         * getUser valida la sesión contra Supabase,
+         * no solo contra el valor persistido localmente.
+         */
+        const {
+          data: userData,
+          error: userError,
+        } = await supabase.auth.getUser()
+
+        if (userError) throw userError
+
+        if (!userData.user) {
+          throw new Error(
+            'La sesión de recuperación no es válida.'
+          )
         }
       } catch (error: any) {
         if (!cancelled) {
-          setLinkError(
-            error.message ??
-              'El enlace no es válido o expiró.'
+          setSessionError(
+            error?.message ??
+              'La sesión de recuperación no es válida o expiró.'
           )
-
-          setLoadingLink(false)
+        }
+      } finally {
+        if (!cancelled) {
+          setValidatingSession(false)
         }
       }
-    }
-
-    void Linking.getInitialURL().then(
-      (url) => {
-        if (url) {
-          void processUrl(url)
-          return
-        }
-
-        void supabase.auth
-          .getSession()
-          .then(({ data }) => {
-            if (cancelled) return
-
-            if (data.session) {
-              setLoadingLink(false)
-            } else {
-              setLinkError(
-                'Abre esta pantalla desde el enlace enviado a tu correo.'
-              )
-
-              setLoadingLink(false)
-            }
-          })
-      }
-    )
-
-    const subscription =
-      Linking.addEventListener(
-        'url',
-        ({ url }) => {
-          void processUrl(url)
-        }
-      )
+    })()
 
     return () => {
       cancelled = true
-      subscription.remove()
     }
   }, [])
 
@@ -245,42 +156,50 @@ export default function ResetPasswordScreen() {
     try {
       setSaving(true)
 
-      const { error } =
-        await supabase.auth.updateUser({
-          password,
-        })
+      const {
+        data,
+        error,
+      } = await supabase.auth.updateUser({
+        password,
+      })
 
       if (error) throw error
 
-      /*
-       * Cerramos la sesión temporal de recuperación
-       * para pedir un inicio de sesión normal.
-       */
-      await supabase.auth.signOut()
+      if (!data.user) {
+        throw new Error(
+          'No se pudo confirmar la actualización de la contraseña.'
+        )
+      }
 
-      Alert.alert(
-        'Contraseña actualizada',
-        'Ya puedes iniciar sesión con tu nueva contraseña.',
-        [
-          {
-            text: 'Continuar',
-            onPress: () =>
-              router.replace('/login'),
-          },
-        ]
-      )
+      /*
+       * Cerramos la sesión temporal de recuperación.
+       * Si el cierre falla, la contraseña ya fue actualizada igualmente.
+       */
+      const {
+        error: signOutError,
+      } = await supabase.auth.signOut()
+
+      if (signOutError) {
+        console.warn(
+          'La contraseña se actualizó, pero no se pudo cerrar la sesión temporal:',
+          signOutError.message
+        )
+      }
+
+      setUpdated(true)
     } catch (error: any) {
       Alert.alert(
         'No se pudo actualizar',
-        error.message ??
-          'Solicita un enlace de recuperación nuevo.'
+        getUpdatePasswordErrorMessage(
+          error?.message
+        )
       )
     } finally {
       setSaving(false)
     }
   }
 
-  if (loadingLink) {
+  if (validatingSession) {
     return (
       <SafeAreaView style={styles.center}>
         <ActivityIndicator
@@ -289,13 +208,13 @@ export default function ResetPasswordScreen() {
         />
 
         <Text style={styles.loadingText}>
-          Validando enlace...
+          Validando recuperación...
         </Text>
       </SafeAreaView>
     )
   }
 
-  if (linkError) {
+  if (sessionError) {
     return (
       <SafeAreaView style={styles.center}>
         <View style={styles.errorIcon}>
@@ -307,11 +226,11 @@ export default function ResetPasswordScreen() {
         </View>
 
         <Text style={styles.errorTitle}>
-          Enlace no disponible
+          Recuperación no disponible
         </Text>
 
         <Text style={styles.errorText}>
-          {linkError}
+          {sessionError}
         </Text>
 
         <Pressable
@@ -321,7 +240,40 @@ export default function ResetPasswordScreen() {
           }
         >
           <Text style={styles.primaryButtonText}>
-            Solicitar otro enlace
+            Solicitar otro código
+          </Text>
+        </Pressable>
+      </SafeAreaView>
+    )
+  }
+
+  if (updated) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <View style={styles.successIcon}>
+          <Ionicons
+            name="checkmark"
+            size={45}
+            color="#ffffff"
+          />
+        </View>
+
+        <Text style={styles.successTitle}>
+          Contraseña actualizada
+        </Text>
+
+        <Text style={styles.successText}>
+          Ya puedes iniciar sesión con tu contraseña nueva.
+        </Text>
+
+        <Pressable
+          style={styles.primaryButton}
+          onPress={() =>
+            router.replace('/login')
+          }
+        >
+          <Text style={styles.primaryButtonText}>
+            Iniciar sesión
           </Text>
         </Pressable>
       </SafeAreaView>
@@ -339,9 +291,7 @@ export default function ResetPasswordScreen() {
         }
       >
         <ScrollView
-          contentContainerStyle={
-            styles.container
-          }
+          contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.icon}>
@@ -400,11 +350,17 @@ export default function ResetPasswordScreen() {
                 color="#ffffff"
               />
             ) : (
-              <Text
-                style={styles.primaryButtonText}
-              >
-                Guardar nueva contraseña
-              </Text>
+              <>
+                <Ionicons
+                  name="save-outline"
+                  size={19}
+                  color="#ffffff"
+                />
+
+                <Text style={styles.primaryButtonText}>
+                  Guardar nueva contraseña
+                </Text>
+              </>
             )}
           </Pressable>
         </ScrollView>
@@ -471,6 +427,8 @@ const styles = StyleSheet.create({
 
   primaryButton: {
     minHeight: 51,
+    flexDirection: 'row',
+    gap: 8,
 
     backgroundColor: '#16a34a',
     borderRadius: 13,
@@ -513,6 +471,7 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 23,
     fontWeight: '900',
+    textAlign: 'center',
     marginTop: 18,
   },
 
@@ -522,5 +481,33 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     textAlign: 'center',
     marginTop: 8,
+  },
+
+  successIcon: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+
+    backgroundColor: '#16a34a',
+
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  successTitle: {
+    color: '#111827',
+    fontSize: 25,
+    fontWeight: '900',
+    textAlign: 'center',
+    marginTop: 19,
+  },
+
+  successText: {
+    color: '#6b7280',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
+    marginTop: 8,
+    marginBottom: 16,
   },
 })

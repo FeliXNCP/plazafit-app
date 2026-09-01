@@ -2,36 +2,54 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { router } from 'expo-router'
 import { useState } from 'react'
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../../lib/supabase'
 
-const RESET_PASSWORD_REDIRECT_URL =
-  'plazafit://reset-password'
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+}
+
+function getRecoveryRequestErrorMessage(
+  message: string | undefined
+) {
+  const normalized = message?.toLowerCase() ?? ''
+
+  if (
+    normalized.includes('rate limit') ||
+    normalized.includes('too many requests')
+  ) {
+    return 'Espera un momento antes de solicitar otro código.'
+  }
+
+  return (
+    message ??
+    'No se pudo enviar el código de recuperación.'
+  )
+}
 
 export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState('')
   const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState(false)
 
   async function handleSend() {
-    const normalizedEmail =
-      email.trim().toLowerCase()
+    const normalizedEmail = normalizeEmail(email)
 
-    if (
-      !normalizedEmail ||
-      !normalizedEmail.includes('@')
-    ) {
+    if (!isValidEmail(normalizedEmail)) {
       Alert.alert(
         'Correo no válido',
         'Ingresa el correo asociado a tu cuenta.'
@@ -42,77 +60,36 @@ export default function ForgotPasswordScreen() {
     try {
       setSending(true)
 
+      /*
+       * La plantilla "Reset Password" de Supabase debe usar {{ .Token }}
+       * y no {{ .ConfirmationURL }}.
+       */
       const { error } =
-        await supabase.auth
-          .resetPasswordForEmail(
-            normalizedEmail,
-            {
-              redirectTo:
-                RESET_PASSWORD_REDIRECT_URL,
-            }
-          )
+        await supabase.auth.resetPasswordForEmail(
+          normalizedEmail
+        )
 
       if (error) throw error
 
-      setSent(true)
+      /*
+       * El mensaje permanece genérico: no confirmamos si la cuenta existe.
+       */
+      router.push({
+        pathname: '/verify-recovery-code',
+        params: {
+          email: normalizedEmail,
+        },
+      })
     } catch (error: any) {
       Alert.alert(
         'No se pudo enviar',
-        error.message ??
-          'No se pudo enviar el correo de recuperación.'
+        getRecoveryRequestErrorMessage(
+          error?.message
+        )
       )
     } finally {
       setSending(false)
     }
-  }
-
-  if (sent) {
-    return (
-      <SafeAreaView style={styles.screen}>
-        <View style={styles.resultContainer}>
-          <View style={styles.resultIcon}>
-            <Ionicons
-              name="mail-outline"
-              size={36}
-              color="#166534"
-            />
-          </View>
-
-          <Text style={styles.resultTitle}>
-            Revisa tu correo
-          </Text>
-
-          <Text style={styles.resultText}>
-            Si existe una cuenta asociada a ese
-            correo, recibirás un enlace para crear
-            una nueva contraseña.
-          </Text>
-
-          <Pressable
-            style={styles.primaryButton}
-            onPress={() =>
-              router.replace('/login')
-            }
-          >
-            <Text style={styles.primaryButtonText}>
-              Volver a iniciar sesión
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={styles.secondaryButton}
-            onPress={() => {
-              setSent(false)
-              setEmail('')
-            }}
-          >
-            <Text style={styles.secondaryButtonText}>
-              Usar otro correo
-            </Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    )
   }
 
   return (
@@ -126,14 +103,13 @@ export default function ForgotPasswordScreen() {
         }
       >
         <ScrollView
-          contentContainerStyle={
-            styles.container
-          }
+          contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
         >
           <Pressable
             style={styles.backButton}
             onPress={() => router.back()}
+            disabled={sending}
           >
             <Ionicons
               name="chevron-back"
@@ -155,9 +131,9 @@ export default function ForgotPasswordScreen() {
           </Text>
 
           <Text style={styles.description}>
-            Ingresa el correo de tu cuenta y te
-            enviaremos un enlace para establecer
-            una contraseña nueva.
+            Ingresa el correo de tu cuenta. Te enviaremos un
+            código para crear una contraseña nueva dentro de
+            PlazaFit.
           </Text>
 
           <TextInput
@@ -194,13 +170,24 @@ export default function ForgotPasswordScreen() {
                 color="#ffffff"
               />
             ) : (
-              <Text
-                style={styles.primaryButtonText}
-              >
-                Enviar enlace
-              </Text>
+              <>
+                <Ionicons
+                  name="mail-outline"
+                  size={19}
+                  color="#ffffff"
+                />
+
+                <Text style={styles.primaryButtonText}>
+                  Enviar código
+                </Text>
+              </>
             )}
           </Pressable>
+
+          <Text style={styles.securityNote}>
+            Si existe una cuenta asociada, recibirás el código
+            en ese correo.
+          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -286,6 +273,8 @@ const styles = StyleSheet.create({
 
   primaryButton: {
     minHeight: 50,
+    flexDirection: 'row',
+    gap: 8,
 
     backgroundColor: '#16a34a',
     borderRadius: 13,
@@ -302,53 +291,15 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  secondaryButton: {
-    minHeight: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-
-  secondaryButtonText: {
-    color: '#166534',
-    fontWeight: '800',
+  securityNote: {
+    color: '#6b7280',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+    marginTop: 14,
   },
 
   disabled: {
     opacity: 0.65,
-  },
-
-  resultContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-
-    padding: 28,
-  },
-
-  resultIcon: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-
-    backgroundColor: '#dcfce7',
-
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  resultTitle: {
-    color: '#111827',
-    fontSize: 27,
-    fontWeight: '900',
-    marginTop: 20,
-  },
-
-  resultText: {
-    color: '#6b7280',
-    fontSize: 15,
-    lineHeight: 22,
-    textAlign: 'center',
-    marginTop: 9,
   },
 })
