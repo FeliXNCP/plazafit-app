@@ -96,7 +96,33 @@ export default function AppLayout() {
           },
           headerShadowVisible: false,
         }}
-/>
+      />
+
+      <Stack.Screen
+        name="ejercicios-casa"
+        options={{
+          headerShown: true,
+          title: 'Ejercicios para ti',
+          headerTintColor: '#166534',
+          headerStyle: {
+            backgroundColor: '#f0fdf4',
+          },
+          headerShadowVisible: false,
+        }}
+      />
+
+      <Stack.Screen
+        name="plan-casa"
+        options={{
+          headerShown: true,
+          title: 'Mi plan Home Gym',
+          headerTintColor: '#166534',
+          headerStyle: {
+            backgroundColor: '#f0fdf4',
+          },
+          headerShadowVisible: false,
+        }}
+      />
 
     </Stack>
   )

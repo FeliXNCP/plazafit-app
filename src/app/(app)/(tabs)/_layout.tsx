@@ -43,6 +43,19 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="home-gym"
+        options={{
+          title: 'Casa',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons
+              name="home-outline"
+              size={size}
+              color={color}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Perfil',

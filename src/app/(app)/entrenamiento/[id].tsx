@@ -25,6 +25,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../../../lib/supabase'
 import type { Database } from '../../../types/database.types'
+import { ExerciseDemonstration } from '../../../components/training/ExerciseDemonstration'
+import { useWorkoutDemonstrations } from '../../../hooks/use-workout-demonstrations'
 
 import {
   AchievementUnlockBanner,
@@ -37,6 +39,9 @@ type WorkoutSession = Pick<
   | 'id'
   | 'routine_id'
   | 'plaza_id'
+  | 'workout_source'
+  | 'home_plan_id'
+  | 'home_plan_day_id'
   | 'routine_title_snapshot'
   | 'plaza_name_snapshot'
   | 'status'
@@ -252,6 +257,12 @@ export default function WorkoutScreen() {
   const [session, setSession] = useState<WorkoutSession | null>(null)
   const [steps, setSteps] = useState<WorkoutStep[]>([])
 
+  // Carga de medios independiente: nunca bloquea la sincronización del reloj.
+  const demonstrationsByStep = useWorkoutDemonstrations(
+    session?.id,
+    session?.status === 'in_progress'
+  )
+
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
   const [submittedElapsedSeconds, setSubmittedElapsedSeconds] =
@@ -438,6 +449,9 @@ export default function WorkoutScreen() {
               id,
               routine_id,
               plaza_id,
+              workout_source,
+              home_plan_id,
+              home_plan_day_id,
               routine_title_snapshot,
               plaza_name_snapshot,
               status,
@@ -1158,7 +1172,9 @@ export default function WorkoutScreen() {
 
       if (error) throw error
 
-      if (currentSession.routine_id) {
+      if (currentSession.workout_source === 'home_gym') {
+        router.replace('/plan-casa')
+      } else if (currentSession.routine_id) {
         router.replace({
           pathname: '/rutina/[id]',
           params: { id: String(currentSession.routine_id) },
@@ -1191,6 +1207,11 @@ export default function WorkoutScreen() {
   }
 
   function returnToRoutine() {
+    if (session?.workout_source === 'home_gym') {
+      router.replace('/plan-casa')
+      return
+    }
+
     if (session?.routine_id) {
       router.replace({
         pathname: '/rutina/[id]',
@@ -1532,7 +1553,9 @@ export default function WorkoutScreen() {
             onPress={returnToRoutine}
           >
             <Text style={styles.primaryActionText}>
-              Volver a la rutina
+              {session.workout_source === 'home_gym'
+                ? 'Volver al plan'
+                : 'Volver a la rutina'}
             </Text>
           </Pressable>
         </ScrollView>
@@ -1558,7 +1581,9 @@ export default function WorkoutScreen() {
           onPress={returnToRoutine}
         >
           <Text style={styles.primaryActionText}>
-            Volver a la rutina
+            {session.workout_source === 'home_gym'
+              ? 'Volver al plan'
+              : 'Volver a la rutina'}
           </Text>
         </Pressable>
       </SafeAreaView>
@@ -1639,6 +1664,13 @@ export default function WorkoutScreen() {
             <Text style={styles.exerciseTitle}>
               {activeStep.title_snapshot}
             </Text>
+
+            <ExerciseDemonstration
+              key={`demonstration-step-${activeStep.id}`}
+              demonstration={demonstrationsByStep[String(activeStep.id)] ?? null}
+              exerciseName={activeStep.title_snapshot}
+              playing={clockIsRunning && !processing && !activating}
+            />
 
             {activeStep.instruction_snapshot ? (
               <Text style={styles.exerciseInstruction}>
