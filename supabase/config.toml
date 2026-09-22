@@ -397,3 +397,6 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 
 [functions.compute-walking-route]
 verify_jwt = true
+
+[functions.home-gym-generate-openai]
+verify_jwt = true

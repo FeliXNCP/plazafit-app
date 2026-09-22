@@ -1005,12 +1005,24 @@ export default function HomePlanScreen() {
 
           <View style={{ flex: 1 }}>
             <Text style={styles.generatorEyebrow}>Origen del plan</Text>
-            <Text style={styles.generatorTitle}>Reglas PlazaFit</Text>
+            <Text style={styles.generatorTitle}>
+              {plan.generation_source === 'ai' ? 'OpenAI · Piloto' : plan.generation_source === 'manual' ? 'Plan manual' : 'Reglas PlazaFit'}
+            </Text>
             <Text style={styles.generatorText}>
-              Sin IA y sin costo de API · {plan.generator_version}
+              {plan.generation_source === 'ai'
+                ? `Propuesta revisada por las reglas de PlazaFit · ${String(plan.generation_metadata.model ?? '')}`
+                : plan.generation_source === 'manual' ? 'Creado manualmente' : `Sin IA y sin costo de API · ${plan.generator_version}`}
             </Text>
           </View>
         </View>
+
+        <Pressable
+          onPress={() => router.push('/home-gym-ia')}
+          style={{ padding: 16, borderRadius: 16, backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#86efac' }}
+        >
+          <Text style={{ color: '#166534', fontSize: 16, fontWeight: '800' }}>Generar propuesta con IA</Text>
+          <Text style={{ color: '#166534', fontSize: 13, marginTop: 5 }}>Piloto de pago. Revisa la propuesta antes de aplicar una nueva versión.</Text>
+        </Pressable>
 
         {executionState.activeWorkout ? (
           <Pressable

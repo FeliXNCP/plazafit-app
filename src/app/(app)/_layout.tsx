@@ -124,6 +124,18 @@ export default function AppLayout() {
         }}
       />
 
+      <Stack.Screen
+        name="home-gym-ia"
+        options={{
+          headerShown: true,
+          title: 'Propuesta con IA',
+          headerTintColor: '#166534',
+          headerStyle: { backgroundColor: '#f0fdf4' },
+          headerShadowVisible: false,
+        }}
+      />
+
+
     </Stack>
   )
 }
