@@ -27,7 +27,7 @@ export type WorkoutPlanGenerationInput = {
   equipment_codes: string[];
   allowed_exercises: ExerciseCandidate[];
   policy: { version: 'plazafit-validator/1'; max_session_seconds: number };
-  reference: { plan_id: string; version: number; generator_version: string };
+  reference: { plan_id: string | null; version: number | null; generator_version: string | null; updated_at?: string | null };
 };
 export type ValidationIssue = { code: string; path: string };
 export type ValidationReport = {

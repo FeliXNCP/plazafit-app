@@ -1,9 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
+import { PlanGenerationSheet } from '../../components/home-gym/PlanGenerationSheet'
+import { planOriginLabel } from '../../services/home-gym/generation-ui-policy'
 import { router, useFocusEffect } from 'expo-router'
 import {
   type ComponentProps,
   useCallback,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import {
@@ -541,6 +544,8 @@ export default function HomePlanScreen() {
     useState<HomePlanEnvelope>(EMPTY_PLAN_DATA)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [showGenerationSheet, setShowGenerationSheet] = useState(false)
+  const generationInFlight = useRef(false)
   const [startingDayId, setStartingDayId] = useState<string | null>(null)
   const [expandedDayIds, setExpandedDayIds] = useState<string[]>([])
   const [executionState, setExecutionState] =
@@ -729,8 +734,8 @@ export default function HomePlanScreen() {
   }
 
   async function generatePlan() {
-    if (generating) return
-
+    if (generationInFlight.current) return
+    generationInFlight.current = true
     try {
       setGenerating(true)
 
@@ -779,6 +784,7 @@ export default function HomePlanScreen() {
 
       Alert.alert('No se pudo generar', message)
     } finally {
+      generationInFlight.current = false
       setGenerating(false)
     }
   }
@@ -799,26 +805,24 @@ export default function HomePlanScreen() {
       return
     }
 
-    if (!planData.hasActivePlan) {
-      void generatePlan()
-      return
-    }
+    setShowGenerationSheet(true)
+  }
 
-    Alert.alert(
-      'Regenerar plan semanal',
-      'El plan actual se archivará y PlazaFit creará una nueva versión usando tus preferencias actuales.',
-      [
-        {
-          text: 'Cancelar',
-          style: 'cancel',
-        },
-        {
-          text: 'Regenerar',
-          onPress: () => {
-            void generatePlan()
-          },
-        },
-      ]
+  function generationSheet() {
+    return (
+      <PlanGenerationSheet
+        visible={showGenerationSheet}
+        hasActivePlan={planData.hasActivePlan}
+        onClose={() => setShowGenerationSheet(false)}
+        onRules={() => {
+          setShowGenerationSheet(false)
+          void generatePlan()
+        }}
+        onAI={() => {
+          setShowGenerationSheet(false)
+          router.push('/home-gym-ia')
+        }}
+      />
     )
   }
 
@@ -864,7 +868,7 @@ export default function HomePlanScreen() {
               <Ionicons name="sparkles-outline" size={35} color="#166534" />
             </View>
 
-            <Text style={styles.createEyebrow}>Generador por reglas</Text>
+            <Text style={styles.createEyebrow}>Tu semana</Text>
             <Text style={styles.createTitle}>Tu plan está a un paso</Text>
             <Text style={styles.createDescription}>
               PlazaFit seleccionará ejercicios compatibles y los distribuirá en una semana según tu tiempo disponible.
@@ -897,7 +901,7 @@ export default function HomePlanScreen() {
           <View style={styles.infoCard}>
             <Ionicons name="information-circle-outline" size={23} color="#166534" />
             <Text style={styles.infoText}>
-              Esta versión no utiliza IA ni genera costos. El resultado será reproducible y quedará guardado en Supabase.
+              Elige Reglas PlazaFit o IA. Con IA podrás revisar la propuesta antes de usarla.
             </Text>
           </View>
 
@@ -911,7 +915,7 @@ export default function HomePlanScreen() {
             ) : (
               <>
                 <Ionicons name="sparkles-outline" size={21} color="#ffffff" />
-                <Text style={styles.generateButtonText}>Crear mi plan semanal</Text>
+                <Text style={styles.generateButtonText}>Crear mi plan</Text>
               </>
             )}
           </Pressable>
@@ -924,6 +928,7 @@ export default function HomePlanScreen() {
             <Text style={styles.secondaryActionText}>Revisar ejercicios compatibles</Text>
           </Pressable>
         </ScrollView>
+        {generationSheet()}
       </SafeAreaView>
     )
   }
@@ -956,6 +961,11 @@ export default function HomePlanScreen() {
             {goalLabel(plan.goal_snapshot)} · {levelLabel(plan.fitness_level_snapshot)}
           </Text>
 
+          <View style={styles.originChip}>
+            <Ionicons name={plan.generation_source === 'ai' ? 'sparkles-outline' : 'git-branch-outline'} size={14} color="#dcfce7" />
+            <Text style={styles.originText}>{planOriginLabel(plan.generation_source)}</Text>
+          </View>
+
           <View style={styles.heroStatsRow}>
             <View style={styles.heroStat}>
               <Text style={styles.heroStatValue}>{plan.total_days}</Text>
@@ -985,44 +995,11 @@ export default function HomePlanScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.staleTitle}>Tus preferencias cambiaron</Text>
               <Text style={styles.staleText}>
-                Actualizaste {planData.staleReasons.map(staleReasonLabel).join(', ')}. Regenera el plan para aplicar los cambios.
+                Actualizaste {planData.staleReasons.map(staleReasonLabel).join(', ')}. Crea un plan actualizado antes de comenzar otra sesión.
               </Text>
             </View>
           </View>
-        ) : (
-          <View style={styles.currentCard}>
-            <Ionicons name="shield-checkmark-outline" size={22} color="#166534" />
-            <Text style={styles.currentText}>
-              Este plan coincide con tu perfil y equipamiento actuales.
-            </Text>
-          </View>
-        )}
-
-        <View style={styles.generatorCard}>
-          <View style={styles.generatorIcon}>
-            <Ionicons name="git-branch-outline" size={21} color="#166534" />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.generatorEyebrow}>Origen del plan</Text>
-            <Text style={styles.generatorTitle}>
-              {plan.generation_source === 'ai' ? 'OpenAI · Piloto' : plan.generation_source === 'manual' ? 'Plan manual' : 'Reglas PlazaFit'}
-            </Text>
-            <Text style={styles.generatorText}>
-              {plan.generation_source === 'ai'
-                ? `Propuesta revisada por las reglas de PlazaFit · ${String(plan.generation_metadata.model ?? '')}`
-                : plan.generation_source === 'manual' ? 'Creado manualmente' : `Sin IA y sin costo de API · ${plan.generator_version}`}
-            </Text>
-          </View>
-        </View>
-
-        <Pressable
-          onPress={() => router.push('/home-gym-ia')}
-          style={{ padding: 16, borderRadius: 16, backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#86efac' }}
-        >
-          <Text style={{ color: '#166534', fontSize: 16, fontWeight: '800' }}>Generar propuesta con IA</Text>
-          <Text style={{ color: '#166534', fontSize: 13, marginTop: 5 }}>Piloto de pago. Revisa la propuesta antes de aplicar una nueva versión.</Text>
-        </Pressable>
+        ) : null}
 
         {executionState.activeWorkout ? (
           <Pressable
@@ -1076,7 +1053,7 @@ export default function HomePlanScreen() {
           </View>
 
           <Text style={styles.weeklyExecutionHelp}>
-            Cada día se marca al completar al menos una sesión válida durante la semana. Una sesión es válida desde 75 % de pasos completados.
+            Completa una sesión válida de cada día para avanzar esta semana.
           </Text>
         </View>
 
@@ -1087,7 +1064,7 @@ export default function HomePlanScreen() {
           </View>
 
           <Text style={styles.sessionTargetText}>
-            Objetivo: {plan.session_minutes_snapshot} min
+            Disponibilidad: {plan.session_minutes_snapshot} min
           </Text>
         </View>
 
@@ -1244,20 +1221,6 @@ export default function HomePlanScreen() {
           )
         })}
 
-        <View style={styles.nextBlockCard}>
-          <View style={styles.nextBlockIcon}>
-            <Ionicons name="play-outline" size={25} color="#166534" />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.nextBlockEyebrow}>Motor conectado</Text>
-            <Text style={styles.nextBlockTitle}>Entrena y guarda tu progreso</Text>
-            <Text style={styles.nextBlockText}>
-              Estas sesiones usan el mismo temporizador y registro de PlazaFit. Al completarlas válidamente alimentan XP, objetivo semanal, racha, logros generales e historial.
-            </Text>
-          </View>
-        </View>
-
         <Pressable
           style={[styles.generateButton, generating && styles.buttonDisabled]}
           onPress={requestGeneration}
@@ -1270,8 +1233,8 @@ export default function HomePlanScreen() {
               <Ionicons name="refresh-outline" size={21} color="#ffffff" />
               <Text style={styles.generateButtonText}>
                 {planData.matchesCurrentProfile
-                  ? 'Generar una nueva versión'
-                  : 'Regenerar con mis cambios'}
+                  ? 'Crear nuevo plan'
+                  : 'Crear plan actualizado'}
               </Text>
             </>
           )}
@@ -1282,14 +1245,17 @@ export default function HomePlanScreen() {
           onPress={() => router.push('/ejercicios-casa')}
         >
           <Ionicons name="library-outline" size={19} color="#166534" />
-          <Text style={styles.secondaryActionText}>Ver catálogo compatible</Text>
+          <Text style={styles.secondaryActionText}>Ver ejercicios compatibles</Text>
         </Pressable>
       </ScrollView>
+      {generationSheet()}
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
+  originChip: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.12)' },
+  originText: { color: '#dcfce7', fontSize: 12, fontWeight: '700' },
   screen: {
     flex: 1,
     backgroundColor: '#f0fdf4',
@@ -1564,57 +1530,6 @@ const styles = StyleSheet.create({
     color: '#92400e',
     fontSize: 13,
     lineHeight: 19,
-    marginTop: 3,
-  },
-  currentCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    backgroundColor: '#dcfce7',
-    borderWidth: 1,
-    borderColor: '#86efac',
-    borderRadius: 15,
-    padding: 14,
-  },
-  currentText: {
-    flex: 1,
-    color: '#166534',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  generatorCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 11,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#dcfce7',
-    borderRadius: 17,
-    padding: 15,
-  },
-  generatorIcon: {
-    width: 43,
-    height: 43,
-    borderRadius: 22,
-    backgroundColor: '#dcfce7',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  generatorEyebrow: {
-    color: '#16a34a',
-    fontSize: 10,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-  },
-  generatorTitle: {
-    color: '#111827',
-    fontSize: 15,
-    fontWeight: '900',
-    marginTop: 2,
-  },
-  generatorText: {
-    color: '#6b7280',
-    fontSize: 12,
     marginTop: 3,
   },
   sectionHeading: {
@@ -1902,41 +1817,5 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '900',
-  },
-  nextBlockCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 11,
-    backgroundColor: '#dcfce7',
-    borderWidth: 1,
-    borderColor: '#86efac',
-    borderRadius: 17,
-    padding: 16,
-  },
-  nextBlockIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nextBlockEyebrow: {
-    color: '#16a34a',
-    fontSize: 10,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-  },
-  nextBlockTitle: {
-    color: '#111827',
-    fontSize: 17,
-    fontWeight: '900',
-    marginTop: 2,
-  },
-  nextBlockText: {
-    color: '#166534',
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 4,
   },
 })

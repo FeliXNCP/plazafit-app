@@ -22,7 +22,7 @@ export type GenerationRequest = {
 }
 export type PilotState = {
   enabled: boolean; allowed: boolean; model: string; daily_limit: number; used_today: number
-  pilot_budget_usd: number; reserved_usd: number; requests: GenerationRequest[]
+  pilot_budget_usd: number; reserved_usd: number; cooldown_seconds?: number; requests: GenerationRequest[]
 }
 const record = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 const STATES: GenerationStatus[] = ['queued','processing','ready','rejected','failed','expired','applied']
@@ -50,7 +50,7 @@ export async function getOpenAIPilotState(): Promise<PilotState> {
   if(!record(data) || !Array.isArray(data.requests))throw new Error('HGAI_INVALID_SERVER_RESPONSE')
   return {enabled:data.enabled===true,allowed:data.allowed===true,model:String(data.model ?? ''),
     daily_limit:Number(data.daily_limit),used_today:Number(data.used_today),pilot_budget_usd:Number(data.pilot_budget_usd),
-    reserved_usd:Number(data.reserved_usd),requests:data.requests.map(parseRequest)}
+    reserved_usd:Number(data.reserved_usd),cooldown_seconds:Number(data.cooldown_seconds ?? 60),requests:data.requests.map(parseRequest)}
 }
 export async function beginOpenAIRequest(): Promise<GenerationRequest> {
   const {data,error}=await supabase.rpc('begin_my_home_gym_openai_request')
@@ -80,14 +80,15 @@ export async function applyOpenAIRequest(id: string): Promise<GenerationRequest>
   return parseRequest(data)
 }
 const MESSAGES: Record<string,string> = {
+  HGAI_UX2_SCHEMA_REQUIRED:'Falta actualizar el flujo de generación en la base de datos.',
   AUTH_REQUIRED:'Vuelve a iniciar sesión.',
-  HGAI_DISABLED:'El piloto está desactivado. El generador por reglas sigue disponible.',
-  HGAI_ACCESS_DENIED:'Esta cuenta no está autorizada para el piloto.',
-  HGAI_DAILY_LIMIT:'Alcanzaste la cuota diaria del piloto. Se reinicia a las 00:00 UTC.',
+  HGAI_DISABLED:'La generación con IA está desactivada. Las reglas de PlazaFit siguen disponibles.',
+  HGAI_ACCESS_DENIED:'La generación con IA todavía no está habilitada para esta cuenta.',
+  HGAI_DAILY_LIMIT:'Alcanzaste la cuota diaria de IA. Se reinicia a las 00:00 UTC.',
   HGAI_COOLDOWN:'Espera al menos 60 segundos desde tu última solicitud.',
-  HGAI_PILOT_BUDGET:'El presupuesto interno del piloto está reservado. No se realizó otra llamada a OpenAI.',
-  HGAI_REFERENCE_PLAN_REQUIRED:'Crea primero un plan normal desde Casa.',
-  HGAI_REFERENCE_PLAN_STALE:'Actualiza primero tu plan normal para que coincida con tus preferencias.',
+  HGAI_PILOT_BUDGET:'El presupuesto disponible para IA está reservado. No se realizó otra llamada a OpenAI.',
+  HGAI_REFERENCE_PLAN_REQUIRED:'La base aún exige un plan previo. Falta aplicar la actualización Home Gym UX v2.',
+  HGAI_REFERENCE_PLAN_STALE:'La base aún exige un plan de referencia actualizado. Falta aplicar Home Gym UX v2.',
   HOME_GYM_PROFILE_REQUIRED:'Completa el perfil Home Gym.',
   HOME_GYM_ACTIVE_WORKOUT_BLOCKS_REGENERATION:'Finaliza o abandona tu entrenamiento Home Gym activo antes de reemplazar el plan.',
   HGAI_CONTEXT_CHANGED:'Tu perfil, catálogo o plan cambió. La propuesta anterior ya no se puede aplicar.',
@@ -104,7 +105,7 @@ const MESSAGES: Record<string,string> = {
   HGAI_OPENAI_PERMISSION:'La clave no tiene permiso para esta operación o modelo.',
   HGAI_OPENAI_RATE_LIMIT:'OpenAI limitó temporalmente las solicitudes. No se realizó otro intento.',
   HGAI_OPENAI_BAD_REQUEST:'OpenAI rechazó el formato o configuración de la solicitud. Hay que revisar la integración, no regenerar repetidamente.',
-  HGAI_CONTEXT_TOO_LARGE:'El catálogo supera el tamaño permitido en el piloto.',
+  HGAI_CONTEXT_TOO_LARGE:'El catálogo supera el tamaño permitido para esta generación.',
   HGAI_CATALOG_INSUFFICIENT:'No hay suficientes ejercicios compatibles para esta propuesta.',
   HGAI_VALIDATOR_INTERNAL_ERROR:'Falló el validador interno de PlazaFit. La solicitud se cerró y no se aplicó el plan. El consumo recibido quedó registrado; no se realizó otro intento.',
   HGAI_RESULT_NOT_CONFIRMED:'Esta solicitud fue cerrada sin confirmar el resultado. Se conserva su reserva: no se supone que el consumo haya sido cero. Una nueva propuesta es otra llamada pagada.',

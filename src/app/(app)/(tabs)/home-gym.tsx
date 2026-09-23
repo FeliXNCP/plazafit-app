@@ -218,6 +218,7 @@ export default function HomeGymScreen() {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState(false)
   const [step, setStep] = useState(0)
+  const [overview, setOverview] = useState<{ loaded: boolean; hasPlan: boolean; name: string; activeSessionId: string | null }>({ loaded: false, hasPlan: false, name: '', activeSessionId: null })
 
   const [goal, setGoal] = useState<GoalCode | null>(null)
   const [fitnessLevel, setFitnessLevel] =
@@ -254,6 +255,18 @@ export default function HomeGymScreen() {
       hydrateForm(nextSetup)
       setEditing(false)
       setStep(0)
+      const [planResult, executionResult] = await Promise.all([
+        supabase.rpc('get_my_active_home_gym_plan'),
+        supabase.rpc('get_my_home_gym_execution_state'),
+      ])
+      const plan = planResult.data as { has_active_plan?: boolean; plan?: { name?: string } | null } | null
+      const execution = executionResult.data as { active_session?: { id?: string; workout_source?: string } | null } | null
+      setOverview({
+        loaded: !planResult.error,
+        hasPlan: !planResult.error && plan?.has_active_plan === true,
+        name: plan?.plan?.name ?? '',
+        activeSessionId: !executionResult.error && execution?.active_session?.workout_source === 'home_gym' ? execution.active_session.id ?? null : null,
+      })
     } catch (error: any) {
       Alert.alert(
         'No se pudo cargar Home Gym',
@@ -645,7 +658,7 @@ export default function HomeGymScreen() {
       <>
         <Text style={styles.stepTitle}>¿Cuánto tiempo tienes por sesión?</Text>
         <Text style={styles.stepDescription}>
-          El futuro generador ajustará el número y duración de ejercicios a este límite.
+          Usaremos este tiempo como referencia al crear tu plan.
         </Text>
 
         <View style={styles.durationList}>
@@ -855,7 +868,7 @@ export default function HomeGymScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.benefitTitle}>Con progreso PlazaFit</Text>
                 <Text style={styles.benefitText}>
-                  Más adelante tus sesiones de casa usarán el mismo XP, racha e historial.
+                  Tus sesiones de casa se integran con tu progreso, XP e historial.
                 </Text>
               </View>
             </View>
@@ -871,146 +884,57 @@ export default function HomeGymScreen() {
   }
 
   const profile = setup.profile
+  const planAction = overview.activeSessionId ? 'Continuar entrenamiento'
+    : !overview.loaded ? 'Abrir mi plan' : overview.hasPlan ? 'Ver mi plan' : 'Crear mi plan'
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
-      <ScrollView
-        contentContainerStyle={styles.dashboardContainer}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.dashboardContainer} showsVerticalScrollIndicator={false}>
         <View style={styles.dashboardHero}>
           <View style={styles.dashboardHeroTop}>
-            <View style={styles.dashboardIcon}>
-              <Ionicons name="home-outline" size={29} color="#166534" />
-            </View>
-
+            <View style={styles.dashboardIcon}><Ionicons name="home-outline" size={29} color="#166534" /></View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.dashboardEyebrow}>Home Gym</Text>
-              <Text style={styles.dashboardTitle}>Tu perfil está listo</Text>
+              <Text style={styles.dashboardEyebrow}>HOME GYM</Text>
+              <Text style={styles.dashboardTitle}>Tu entrenamiento en casa</Text>
             </View>
-
-            <Ionicons name="checkmark-circle" size={27} color="#86efac" />
           </View>
-
-          <Text style={styles.dashboardDescription}>
-            Ya guardamos tus preferencias. El siguiente bloque construirá tu plan semanal
-            usando un catálogo controlado de ejercicios.
-          </Text>
+          <Text style={styles.dashboardDescription}>{goalLabel(profile.goal)} · {levelLabel(profile.fitness_level)}</Text>
+          <Text style={styles.dashboardDescription}>{profile.days_per_week} días por semana · {profile.session_minutes} min por sesión</Text>
         </View>
 
-        <View style={styles.summaryGrid}>
-          <View style={styles.summaryCard}>
-            <Ionicons name="flag-outline" size={22} color="#16a34a" />
-            <Text style={styles.summaryValue}>{goalLabel(profile.goal)}</Text>
-            <Text style={styles.summaryLabel}>Objetivo</Text>
+        <Pressable style={styles.planButton} onPress={() => overview.activeSessionId
+          ? router.push({ pathname: '/entrenamiento/[id]', params: { id: overview.activeSessionId } })
+          : router.push('/plan-casa')} accessibilityRole="button">
+          <View style={styles.planButtonIcon}><Ionicons name={overview.activeSessionId ? 'play' : 'calendar-outline'} size={23} color="#ffffff" /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.planButtonTitle}>{planAction}</Text>
+            <Text style={styles.planButtonText}>{overview.activeSessionId ? 'Retoma la sesión donde la dejaste.' : overview.hasPlan ? overview.name : 'Elige reglas o IA para preparar tu semana.'}</Text>
           </View>
-
-          <View style={styles.summaryCard}>
-            <Ionicons name="trending-up-outline" size={22} color="#16a34a" />
-            <Text style={styles.summaryValue}>
-              {levelLabel(profile.fitness_level)}
-            </Text>
-            <Text style={styles.summaryLabel}>Nivel</Text>
-          </View>
-
-          <View style={styles.summaryCard}>
-            <Ionicons name="calendar-outline" size={22} color="#16a34a" />
-            <Text style={styles.summaryNumber}>{profile.days_per_week}</Text>
-            <Text style={styles.summaryLabel}>Días por semana</Text>
-          </View>
-
-          <View style={styles.summaryCard}>
-            <Ionicons name="time-outline" size={22} color="#16a34a" />
-            <Text style={styles.summaryNumber}>{profile.session_minutes}</Text>
-            <Text style={styles.summaryLabel}>Minutos por sesión</Text>
-          </View>
-        </View>
+          <Ionicons name="chevron-forward" size={22} color="#ffffff" />
+        </Pressable>
+        {overview.activeSessionId ? <Pressable style={styles.editButton} onPress={() => router.push('/plan-casa')}><Text style={styles.editButtonText}>Ver mi plan</Text></Pressable> : null}
 
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderIcon}>
-              <Ionicons name="barbell-outline" size={21} color="#166534" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.sectionEyebrow}>Equipamiento</Text>
-              <Text style={styles.sectionTitle}>Disponible en casa</Text>
-            </View>
+            <View style={styles.sectionHeaderIcon}><Ionicons name="barbell-outline" size={21} color="#166534" /></View>
+            <View style={{ flex: 1 }}><Text style={styles.sectionEyebrow}>Equipamiento</Text><Text style={styles.sectionTitle}>Disponible en casa</Text></View>
           </View>
-
           {selectedEquipment.length > 0 ? (
             <View style={styles.equipmentChips}>
-              {selectedEquipment.map((item) => (
-                <View key={item.id} style={styles.equipmentChip}>
-                  <Ionicons
-                    name={equipmentIcon(item.icon_name)}
-                    size={16}
-                    color="#166534"
-                  />
-                  <Text style={styles.equipmentChipText}>{item.name}</Text>
-                </View>
-              ))}
+              {selectedEquipment.map((item) => <View key={item.id} style={styles.equipmentChip}>
+                <Ionicons name={equipmentIcon(item.icon_name)} size={16} color="#166534" />
+                <Text style={styles.equipmentChipText}>{item.name}</Text>
+              </View>)}
             </View>
-          ) : (
-            <View style={styles.bodyweightRow}>
-              <Ionicons name="body-outline" size={21} color="#166534" />
-              <Text style={styles.bodyweightText}>Solo peso corporal</Text>
-            </View>
-          )}
+          ) : <View style={styles.bodyweightRow}><Ionicons name="body-outline" size={21} color="#166534" /><Text style={styles.bodyweightText}>Solo peso corporal</Text></View>}
         </View>
-
-        <View style={styles.nextStepCard}>
-          <View style={styles.nextStepIcon}>
-            <Ionicons name="git-branch-outline" size={26} color="#166534" />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.nextStepEyebrow}>Generador preparado</Text>
-            <Text style={styles.nextStepTitle}>Crea tu plan semanal</Text>
-            <Text style={styles.nextStepText}>
-              PlazaFit ya puede distribuir ejercicios compatibles en sesiones semanales
-              mediante reglas controladas, sin utilizar IA ni generar costos.
-            </Text>
-          </View>
-        </View>
-
-        <Pressable
-          style={styles.planButton}
-          onPress={() => router.push('/plan-casa')}
-        >
-          <View style={styles.planButtonIcon}>
-            <Ionicons name="calendar-outline" size={22} color="#ffffff" />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.planButtonEyebrow}>Plan Home Gym</Text>
-            <Text style={styles.planButtonTitle}>Crear o revisar mi semana</Text>
-            <Text style={styles.planButtonText}>
-              Genera una propuesta según tu objetivo, nivel, tiempo y equipamiento.
-            </Text>
-          </View>
-
-          <Ionicons name="chevron-forward" size={22} color="#ffffff" />
-        </Pressable>
-
-        <Pressable
-          style={styles.catalogButton}
-          onPress={() => router.push('/ejercicios-casa')}
-        >
-          <View style={styles.catalogButtonIcon}>
-            <Ionicons name="library-outline" size={21} color="#166534" />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.catalogButtonEyebrow}>Vista previa</Text>
-            <Text style={styles.catalogButtonTitle}>Ver ejercicios compatibles</Text>
-          </View>
-
+        <Pressable style={styles.catalogButton} onPress={() => router.push('/ejercicios-casa')} accessibilityRole="button">
+          <View style={styles.catalogButtonIcon}><Ionicons name="library-outline" size={21} color="#166534" /></View>
+          <View style={{ flex: 1 }}><Text style={styles.catalogButtonTitle}>Ver ejercicios compatibles</Text></View>
           <Ionicons name="chevron-forward" size={22} color="#16a34a" />
         </Pressable>
-
-        <Pressable style={styles.editButton} onPress={beginOnboarding}>
-          <Ionicons name="create-outline" size={20} color="#166534" />
-          <Text style={styles.editButtonText}>Editar preferencias</Text>
+        <Pressable style={styles.editButton} onPress={beginOnboarding} accessibilityRole="button">
+          <Ionicons name="create-outline" size={20} color="#166534" /><Text style={styles.editButtonText}>Editar preferencias</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>
@@ -1445,39 +1369,6 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginTop: 14,
   },
-  summaryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 11,
-  },
-  summaryCard: {
-    width: '48%',
-    minHeight: 130,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#dcfce7',
-    borderRadius: 18,
-    padding: 15,
-    justifyContent: 'center',
-  },
-  summaryValue: {
-    color: '#111827',
-    fontSize: 15,
-    lineHeight: 19,
-    fontWeight: '900',
-    marginTop: 9,
-  },
-  summaryNumber: {
-    color: '#16a34a',
-    fontSize: 28,
-    fontWeight: '900',
-    marginTop: 7,
-  },
-  summaryLabel: {
-    color: '#6b7280',
-    fontSize: 11,
-    marginTop: 4,
-  },
   sectionCard: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
@@ -1546,42 +1437,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-  nextStepCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    backgroundColor: '#dcfce7',
-    borderWidth: 1,
-    borderColor: '#86efac',
-    borderRadius: 19,
-    padding: 17,
-  },
-  nextStepIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nextStepEyebrow: {
-    color: '#16a34a',
-    fontSize: 10,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-  },
-  nextStepTitle: {
-    color: '#111827',
-    fontSize: 17,
-    fontWeight: '900',
-    marginTop: 3,
-  },
-  nextStepText: {
-    color: '#166534',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 5,
-  },
   planButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1597,12 +1452,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#16a34a',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  planButtonEyebrow: {
-    color: '#86efac',
-    fontSize: 10,
-    fontWeight: '900',
-    textTransform: 'uppercase',
   },
   planButtonTitle: {
     color: '#ffffff',
@@ -1635,12 +1484,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#dcfce7',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  catalogButtonEyebrow: {
-    color: '#16a34a',
-    fontSize: 10,
-    fontWeight: '900',
-    textTransform: 'uppercase',
   },
   catalogButtonTitle: {
     color: '#111827',
