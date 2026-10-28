@@ -1,11 +1,15 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { Stack, router, useFocusEffect } from 'expo-router'
+import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../../lib/supabase'
-import { applyOpenAIRequest, beginOpenAIRequest, executeOpenAIRequest, getOpenAIPilotState,
+import { applyOpenAIRequest, beginOpenAIRequest, beginAdjustmentRequest, executeOpenAIRequest, getOpenAIPilotState,
   openAIErrorMessage, readOpenAIRequest, type GenerationRequest, type PilotState } from '../../services/home-gym/openai-plan-service'
+import { PlanAdjustmentComparison } from '../../components/home-gym/PlanAdjustmentComparison'
+import { comparePlans } from '../../services/home-gym/plan-adjustment-types'
+import { GenerationTraceDetails, PlanGenerationEvidence } from '../../components/home-gym/PlanGenerationEvidence'
+import { MAX_PERSONAL_REQUEST, normalizePersonalRequest } from '../../services/home-gym/personalization-types'
 import { getAIGenerationGate } from '../../services/home-gym/generation-ui-policy'
 
 const LABELS: Record<string, string> = {
@@ -13,15 +17,21 @@ const LABELS: Record<string, string> = {
   rejected: 'La propuesta no pasó la validación', failed: 'No se completó la generación',
   expired: 'Propuesta caducada', applied: 'Plan aplicado',
 }
-type PlanContext = { configured: boolean; hasPlan: boolean; activeHomeSessionId: string | null }
+type PlanContext = { configured: boolean; hasPlan: boolean; activeHomeSessionId: string | null
+  planId: string | null; planName: string | null; matchesProfile: boolean }
+const firstParam = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] : value
 
 export default function HomeGymAIScreen() {
+  const params = useLocalSearchParams<{mode?:string | string[];planId?:string | string[]}>()
+  const adjusting = firstParam(params.mode) === 'adjust'
+  const requestedPlanId = firstParam(params.planId) ?? null
   const [state, setState] = useState<PilotState | null>(null)
   const [selected, setSelected] = useState<GenerationRequest | null>(null)
   const [context, setContext] = useState<PlanContext | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [requestText, setRequestText] = useState('')
   const [showDetails, setShowDetails] = useState(false)
   const [now, setNow] = useState(Date.now())
   const busyRef = useRef(false)
@@ -44,9 +54,10 @@ export default function HomeGymAIScreen() {
         ?? getAIGenerationGate(next).resumeRequest ?? next.requests[0] ?? null)
       if (planResult.error) throw planResult.error
       if (executionResult.error) throw executionResult.error
-      const plan = planResult.data as { configured?: boolean; has_active_plan?: boolean } | null
+      const plan = planResult.data as { configured?: boolean; has_active_plan?: boolean; matches_current_profile?: boolean; plan?:{id?:string;name?:string} } | null
       const execution = executionResult.data as { active_session?: { id?: string; workout_source?: string } | null } | null
       setContext({ configured: plan?.configured === true, hasPlan: plan?.has_active_plan === true,
+        planId:plan?.plan?.id??null,planName:plan?.plan?.name??null,matchesProfile:plan?.matches_current_profile===true,
         activeHomeSessionId: execution?.active_session?.workout_source === 'home_gym' ? execution.active_session.id ?? null : null })
     } catch (e) {
       if (mounted.current && revision === readRevision.current) { setError(openAIErrorMessage(e)); setContext(null) }
@@ -92,16 +103,28 @@ export default function HomeGymAIScreen() {
       if (mounted.current) setBusy(false)
     }
   }
-  const canGenerate = !!context?.configured && !context.activeHomeSessionId && !busy && gate.canGenerate
+  const adjustmentReady = !adjusting || (!!state?.adjustment_enabled && !!context?.hasPlan && context.matchesProfile &&
+    requestedPlanId !== null && requestedPlanId === context.planId && requestText.trim().length>0)
+  const canGenerate = !!context?.configured && !context.activeHomeSessionId && !busy && gate.canGenerate && adjustmentReady
+  const comparison = selected?.generation_mode==='adjust' ? comparePlans(selected.base_plan,selected.candidate) : null
+  const comparisonMissing = selected?.generation_mode==='adjust' && !!selected.candidate && !comparison
+  const unchangedAdjustment = selected?.generation_mode==='adjust' && comparison?.hasChanges===false
 
   function generate() {
     if (!canGenerate || busyRef.current) return
-    Alert.alert('Crear propuesta con IA',
-      'Usaremos tu objetivo, nivel, equipamiento y catálogo compatible. La llamada consume una solicitud de IA, aunque el resultado no sea válido. No enviaremos fotos ni cambiaremos tu plan hasta que lo aceptes.', [
+    const personalized = state?.personalization_enabled === true
+    let note: string
+    try { note = normalizePersonalRequest(personalized ? requestText : '') }
+    catch (e) { setError(openAIErrorMessage(e)); return }
+    Keyboard.dismiss()
+    Alert.alert(adjusting ? 'Ajustar el plan con IA' : 'Crear propuesta con IA',
+      'Usaremos tu perfil y catálogo compatible. Si escribiste una petición, se guardará con esta solicitud en PlazaFit y se enviará a OpenAI. No incluyas datos personales, diagnósticos ni claves. La llamada consume una solicitud aunque falle. Tu plan no cambiará hasta que lo aceptes.', [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Generar propuesta', onPress: () => void run(async () => {
-          const request = await beginOpenAIRequest()
-          if (mounted.current) setSelected(request)
+        { text: adjusting ? 'Generar ajuste' : 'Generar propuesta', onPress: () => void run(async () => {
+          const request = adjusting
+            ? await beginAdjustmentRequest(requestedPlanId!, note)
+            : await beginOpenAIRequest(note, personalized)
+          if (mounted.current) { setSelected(request); setRequestText('') }
           return request.status === 'queued' ? executeOpenAIRequest(request.id) : request
         }) },
       ])
@@ -115,16 +138,16 @@ export default function HomeGymAIScreen() {
     ])
   }
   function apply() {
-    if (!selected || selected.status !== 'ready' || selectedExpired || busyRef.current || !context || context.activeHomeSessionId) return
+    if (!selected || selected.status !== 'ready' || selectedExpired || busyRef.current || !context || context.activeHomeSessionId || comparisonMissing) return
     const requestId = selected.id
-    Alert.alert(context.hasPlan ? 'Reemplazar el plan actual' : 'Usar este plan',
-      context.hasPlan
+    Alert.alert(unchangedAdjustment ? 'Mantener el plan actual' : context.hasPlan ? 'Reemplazar el plan actual' : 'Usar este plan',
+      unchangedAdjustment ? 'No se detectaron cambios. Se conserva la misma versión, sus días y su progreso. La solicitud de IA ya realizada mantiene su consumo.' : context.hasPlan
         ? 'Se archivará el plan actual. El historial se conserva, pero el nuevo plan tendrá sus propios días y progreso.'
         : 'Este será tu primer plan Home Gym. Podrás comenzar sus sesiones desde Mi plan.', [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Usar plan', onPress: () => void run(async () => {
           const result = await applyOpenAIRequest(requestId)
-          if (result.status === 'applied') Alert.alert('Tu plan está listo', 'Ya puedes comenzar a entrenar.', [
+          if (result.status === 'applied') Alert.alert('Tu plan está listo', unchangedAdjustment ? 'Se conservó el mismo plan y su progreso.' : 'Ya puedes comenzar a entrenar.', [
             { text: 'Ver plan', onPress: () => router.replace('/plan-casa') },
           ])
           return result
@@ -140,13 +163,22 @@ export default function HomeGymAIScreen() {
   const status = selectedExpired ? 'expired' : selected?.status
   return (
     <SafeAreaView style={styles.screen} edges={['bottom']}>
-      <Stack.Screen options={{ title: 'Crear con IA' }} />
-      <ScrollView ref={scrollRef} contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <Stack.Screen options={{ title: adjusting ? 'Ajustar con IA' : 'Crear con IA' }} />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.container} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <View style={styles.hero}>
           <Ionicons name="sparkles-outline" size={27} color="#dcfce7" />
-          <Text style={styles.heroTitle}>Tu semana, con IA</Text>
-          <Text style={styles.heroText}>Una propuesta con tus ejercicios compatibles. Tú decides si usarla.</Text>
+          <Text style={styles.heroTitle}>{adjusting ? 'Ajusta tu semana' : 'Tu semana, con IA'}</Text>
+          <Text style={styles.heroText}>{adjusting ? 'Partimos de tu plan actual. Describe un cambio y revisa las diferencias antes de aplicarlo.' : 'Una propuesta con tus ejercicios compatibles. Tú decides si usarla.'}</Text>
         </View>
+        {adjusting ? <View style={styles.card}>
+          <Text style={styles.title}>Plan de origen</Text>
+          <Text style={styles.text}>{context?.planName ?? 'Plan no disponible'}</Text>
+          {!state?.adjustment_enabled ? <Text style={styles.warningText}>Los ajustes aún no están habilitados.</Text> : null}
+          {requestedPlanId !== context?.planId ? <Text style={styles.warningText}>El plan cambió. Vuelve a Mi plan y abre el ajuste desde la versión actual.</Text> : null}
+          {context?.hasPlan && !context.matchesProfile ? <Text style={styles.warningText}>Tus preferencias cambiaron. Crea un plan actualizado en vez de ajustar esta versión.</Text> : null}
+          <Text style={styles.small}>No cambia tus preferencias ni el plan mientras revisas. Si aceptas cambios, se crea otra versión con sus propios días y progreso; el historial se conserva.</Text>
+        </View> : null}
         {error ? <View style={styles.warning}><Text style={styles.warningText}>{error}</Text></View> : null}
         {context?.configured === false ? <View style={styles.warning}>
           <Text style={styles.warningText}>Primero completa tus preferencias de Home Gym.</Text>
@@ -162,10 +194,22 @@ export default function HomeGymAIScreen() {
             <Text style={styles.primaryText}>{gate.resumeRequest.status === 'ready' ? 'Revisar propuesta pendiente' : 'Ver solicitud pendiente'}</Text>
           </Pressable> : null
         ) : <>
-          <Text style={styles.small}>{gate.message ?? `${gate.remaining ?? 0} solicitudes de IA disponibles hoy.`}</Text>
+          {state?.personalization_enabled && context?.configured ? <View style={styles.card}>
+            <Text style={styles.title}>{adjusting ? '¿Qué quieres cambiar?' : '¿Qué te gustaría priorizar?'}</Text>
+            <Text style={styles.text}>{adjusting ? 'Describe el ajuste. Se pedirá conservar el resto cuando sea posible; podrás comprobar todos los cambios antes de confirmar.' : 'Opcional. Cuéntanos una preferencia para esta semana: un equipo que quieras usar o un ejercicio que prefieras evitar.'}</Text>
+            <TextInput value={requestText} onChangeText={(value) => setRequestText(Array.from(value).slice(0, MAX_PERSONAL_REQUEST).join(''))}
+              editable={!busy && !context.activeHomeSessionId} multiline maxLength={MAX_PERSONAL_REQUEST * 2}
+              placeholder={adjusting ? "Por ejemplo: cambia la bicicleta del Día 4 por marcha en el lugar y conserva el resto cuando sea posible." : "Por ejemplo: usa la bicicleta en los días 2 y 4 del plan."}
+              placeholderTextColor="#6b7280" textAlignVertical="top" style={styles.preferenceInput}
+              accessibilityLabel={adjusting ? "Cambio solicitado al plan actual" : "Petición opcional para la generación con IA"} />
+            <Text style={styles.counter}>{Array.from(requestText).length}/{MAX_PERSONAL_REQUEST}</Text>
+            <Text style={styles.small}>Se utilizará tu perfil actual. Habla de Día 1, Día 2… del plan. No incluyas datos personales, información médica ni contraseñas.</Text>
+            <Text style={styles.small}>El texto se guarda con la solicitud y se envía a OpenAI solo cuando confirmas. No modifica el perfil ni elimina los límites del catálogo.</Text>
+          </View> : null}
+          <Text style={styles.small}>{gate.message ?? `${gate.remaining ?? 0} ${(gate.remaining ?? 0) === 1 ? 'solicitud de IA disponible' : 'solicitudes de IA disponibles'} hoy.`}</Text>
           <Pressable style={[styles.primary, !canGenerate && styles.disabled]} disabled={!canGenerate} onPress={generate} accessibilityRole="button">
             {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="sparkles-outline" size={20} color="#fff" />}
-            <Text style={styles.primaryText}>{busy ? 'Procesando…' : 'Generar propuesta'}</Text>
+            <Text style={styles.primaryText}>{busy ? 'Procesando…' : adjusting ? 'Generar ajuste' : 'Generar propuesta'}</Text>
           </Pressable>
         </>}
         <Pressable disabled={busy} style={styles.refresh} onPress={() => { setError(null); void refresh() }} accessibilityRole="button">
@@ -174,12 +218,15 @@ export default function HomeGymAIScreen() {
 
         {selected ? <View style={styles.card} onLayout={(event) => { proposalY.current = event.nativeEvent.layout.y }}>
           <Text style={styles.title}>{LABELS[status ?? selected.status]}</Text>
+          <PlanGenerationEvidence requestText={selected.request_preference} featureVersion={selected.request_preference_version} facts={selected.plan_facts} />
           {status === 'queued' ? <><Text style={styles.text}>La solicitud está guardada y todavía no se ha confirmado su envío.</Text><Pressable disabled={busy} style={styles.secondary} onPress={sendQueued}><Text style={styles.secondaryText}>Enviar solicitud pendiente</Text></Pressable></> : null}
           {status === 'processing' ? <><View style={styles.statusLine}><ActivityIndicator color="#166534" /><Text style={styles.text}>Preparando o confirmando el resultado…</Text></View><Text style={styles.small}>Puedes actualizar el estado. Eso no genera otra propuesta ni reenvía la solicitud.</Text></> : null}
           {status === 'expired' ? <Text style={styles.warningText}>Esta propuesta ya caducó. Tu plan actual se conserva; una nueva generación requiere otra confirmación.</Text> : null}
           {selected.error_code ? <Text style={styles.warningText}>{openAIErrorMessage(selected.error_code)}</Text> : null}
           {(selected.validation?.errors.length ?? 0) > 0 ? <Text style={styles.warningText}>El resultado no cumple las reglas del catálogo y no se aplicó. Puedes revisar el motivo en Detalles de generación.</Text> : null}
           {(selected.validation?.warnings.length ?? 0) > 0 ? <Text style={styles.small}>Hay observaciones sobre la propuesta; revísalas en los detalles antes de usarla.</Text> : null}
+          {selected.generation_mode==='adjust' && selected.candidate ?
+            <PlanAdjustmentComparison before={selected.base_plan} after={selected.candidate} labels={selected.exercise_labels} version={selected.base_plan_info?.version??null} /> : null}
           {selected.candidate ? <>
             <Text style={styles.planTitle}>{selected.candidate.name}</Text>
             <Text style={styles.small}>{status === 'applied' ? 'Propuesta guardada como plan.' : 'Vista previa: aún no reemplaza tu plan.'}</Text>
@@ -192,7 +239,7 @@ export default function HomeGymAIScreen() {
               </View>)}
             </View>)}
           </> : null}
-          {status === 'ready' ? <Pressable disabled={busy || !context || !!context.activeHomeSessionId} style={[styles.primary, (busy || !context || !!context.activeHomeSessionId) && styles.disabled]} onPress={apply}><Text style={styles.primaryText}>Usar este plan</Text></Pressable> : null}
+          {status === 'ready' ? <Pressable disabled={busy || !context || !!context.activeHomeSessionId || comparisonMissing} style={[styles.primary, (busy || !context || !!context.activeHomeSessionId || comparisonMissing) && styles.disabled]} onPress={apply}><Text style={styles.primaryText}>{unchangedAdjustment ? 'Conservar mi plan' : selected.generation_mode==='adjust' ? 'Aplicar estos cambios' : 'Usar este plan'}</Text></Pressable> : null}
           {status === 'applied' ? <Pressable style={styles.secondary} onPress={() => router.replace('/plan-casa')}><Text style={styles.secondaryText}>Ver mi plan</Text></Pressable> : null}
         </View> : null}
 
@@ -206,9 +253,11 @@ export default function HomeGymAIScreen() {
             <Text style={styles.small}>Reserva interna: USD {(state?.reserved_usd ?? 0).toFixed(2)} de {(state?.pilot_budget_usd ?? 0).toFixed(2)}. Cada solicitud reserva USD 0,03; no equivale al cargo del proveedor.</Text>
             {selected ? <>
               <Text style={styles.small}>Solicitud {selected.id.slice(0, 8)} · {new Date(selected.created_at).toLocaleString('es-CL')} · {LABELS[status ?? selected.status]}</Text>
+              <Text style={styles.small}>Operación: {selected.generation_mode==='adjust'?'Ajuste de plan existente':'Creación de plan'}</Text>
               <Text style={styles.small}>Modelo de la solicitud: {selected.model}</Text>
               {selected.usage_status === 'reported' ? <Text style={styles.small}>Tokens: {selected.input_tokens} entrada · {selected.output_tokens} salida. Estimación: USD {(selected.estimated_cost_usd ?? 0).toFixed(6)}. Confirma el cargo en el proveedor.</Text>
                 : <Text style={styles.small}>{selected.usage_status === 'not_sent' ? 'Envío al proveedor no registrado.' : 'Consumo sin confirmar; no se supone que sea cero.'}</Text>}
+              <GenerationTraceDetails trace={selected.trace} requestId={selected.id} appliedPlanId={selected.applied_plan_id} />
               {selected.validation?.errors.map((issue, i) => <Text key={`e-${i}`} style={styles.warningText}>{issue.code} · {issue.path}</Text>)}
               {selected.validation?.warnings.map((issue, i) => <Text key={`w-${i}`} style={styles.small}>Observación: {issue.code} · {issue.path}</Text>)}
             </> : null}
@@ -221,6 +270,7 @@ export default function HomeGymAIScreen() {
         </View>
         <Text style={styles.small}>La propuesta se revisa con reglas técnicas. No sustituye una evaluación profesional del entrenamiento.</Text>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
@@ -236,5 +286,7 @@ const styles = StyleSheet.create({
   planTitle: { color: '#166534', fontWeight: '900', fontSize: 22, marginTop: 6 }, day: { borderTopWidth: 1, borderTopColor: '#dcfce7', paddingTop: 15, gap: 7 },
   step: { paddingVertical: 9, borderTopWidth: 1, borderTopColor: '#ecfdf5', gap: 3 }, stepTitle: { fontWeight: '700', fontSize: 14, color: '#111827' },
   detailsToggle: { minHeight: 38, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, statusLine: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  preferenceInput: { minHeight: 120, borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 12, padding: 12, fontSize: 15, lineHeight: 22, color: '#111827', backgroundColor: '#f9fafb' },
+  counter: { textAlign: 'right', color: '#6b7280', fontSize: 12 },
   refresh: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
 })

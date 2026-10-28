@@ -23,6 +23,10 @@ export type ExerciseCandidate = {
 };
 export type WorkoutPlanGenerationInput = {
   contract_version: 'home-gym-input/1';
+  /** Inyectados por claim desde la nota guardada; no cambian el hash de perfil/catálogo. */
+  personalization_version?: 'home-gym-personalization/1';
+  user_preference?: string;
+  adjustment?: {version:'home-gym-adjustment/1';base_plan:GeneratedWorkoutPlan;base_plan_hash:string};
   profile: { goal: Goal; fitness_level: FitnessLevel; days_per_week: number; session_minutes: number; updated_at: string };
   equipment_codes: string[];
   allowed_exercises: ExerciseCandidate[];

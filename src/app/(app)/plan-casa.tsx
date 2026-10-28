@@ -1221,6 +1221,16 @@ export default function HomePlanScreen() {
           )
         })}
 
+        {planData.matchesCurrentProfile ? <Pressable
+          style={[styles.secondaryAction, (generating || !!executionState.activeWorkout) && styles.buttonDisabled]}
+          disabled={generating || !!executionState.activeWorkout}
+          onPress={() => router.push({ pathname: '/home-gym-ia', params: { mode: 'adjust', planId: plan.id } })}
+          accessibilityRole="button"
+        >
+          <Ionicons name="sparkles-outline" size={19} color="#166534" />
+          <Text style={styles.secondaryActionText}>Ajustar este plan con IA</Text>
+        </Pressable> : null}
+
         <Pressable
           style={[styles.generateButton, generating && styles.buttonDisabled]}
           onPress={requestGeneration}

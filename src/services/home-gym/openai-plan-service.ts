@@ -1,14 +1,9 @@
+import { parseComparablePlan, type CandidatePlan } from './plan-adjustment-types'
 import { supabase } from '../../lib/supabase'
+import { normalizePersonalRequest, parseGenerationTrace, parsePlanFacts, type GenerationTrace, type PlanFacts } from './personalization-types'
 
 export type GenerationStatus = 'queued' | 'processing' | 'ready' | 'rejected' | 'failed' | 'expired' | 'applied'
-export type CandidatePlan = {
-  schema_version: 'home-gym-plan/1'
-  name: string
-  days: {
-    day_number: number; title: string; focus: string
-    steps: { exercise_id: number; sets: number | null; reps: number | null; duration_seconds: number | null; rest_seconds: number }[]
-  }[]
-}
+export type { CandidatePlan } from './plan-adjustment-types'
 
 export type GenerationRequest = {
   id: string; status: GenerationStatus; model: string; error_code: string | null
@@ -19,9 +14,13 @@ export type GenerationRequest = {
   attempts: number; response_id: string | null
   input_tokens: number | null; output_tokens: number | null; estimated_cost_usd: number | null
   usage_status: string
+  request_preference: string; request_preference_version: string | null
+  plan_facts: PlanFacts | null; trace: GenerationTrace | null
+  generation_mode: 'create' | 'adjust'; base_plan: CandidatePlan | null
+  base_plan_info: {id:string | null; name:string; version:number | null} | null
 }
 export type PilotState = {
-  enabled: boolean; allowed: boolean; model: string; daily_limit: number; used_today: number
+  enabled: boolean; allowed: boolean; personalization_enabled: boolean; adjustment_enabled: boolean; model: string; daily_limit: number; used_today: number
   pilot_budget_usd: number; reserved_usd: number; cooldown_seconds?: number; requests: GenerationRequest[]
 }
 const record = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -42,18 +41,38 @@ function parseRequest(v: unknown): GenerationRequest {
     response_id:typeof v.response_id === 'string' ? v.response_id : null,
     input_tokens:nullableNumber(v.input_tokens),output_tokens:nullableNumber(v.output_tokens),estimated_cost_usd:nullableNumber(v.estimated_cost_usd),
     usage_status:String(v.usage_status ?? 'unknown'),
+    request_preference:typeof v.request_preference === 'string' ? v.request_preference : '',
+    request_preference_version:typeof v.request_preference_version === 'string' ? v.request_preference_version : null,
+    plan_facts:parsePlanFacts(v.plan_facts),trace:parseGenerationTrace(v.trace),
+    generation_mode:v.generation_mode==='adjust'?'adjust':'create',
+    base_plan:parseComparablePlan(v.base_plan),
+    base_plan_info:record(v.base_plan_info) ? {id:typeof v.base_plan_info.id==='string'?v.base_plan_info.id:null,
+      name:String(v.base_plan_info.name??''),version:nullableNumber(v.base_plan_info.version)} : null,
   }
 }
 export async function getOpenAIPilotState(): Promise<PilotState> {
   const {data,error}=await supabase.rpc('get_my_home_gym_openai_state')
   if(error)throw error
   if(!record(data) || !Array.isArray(data.requests))throw new Error('HGAI_INVALID_SERVER_RESPONSE')
-  return {enabled:data.enabled===true,allowed:data.allowed===true,model:String(data.model ?? ''),
+  return {enabled:data.enabled===true,allowed:data.allowed===true,personalization_enabled:data.personalization_enabled===true,adjustment_enabled:data.adjustment_enabled===true,model:String(data.model ?? ''),
     daily_limit:Number(data.daily_limit),used_today:Number(data.used_today),pilot_budget_usd:Number(data.pilot_budget_usd),
     reserved_usd:Number(data.reserved_usd),cooldown_seconds:Number(data.cooldown_seconds ?? 60),requests:data.requests.map(parseRequest)}
 }
-export async function beginOpenAIRequest(): Promise<GenerationRequest> {
-  const {data,error}=await supabase.rpc('begin_my_home_gym_openai_request')
+export async function beginOpenAIRequest(requestText = '', personalized = false): Promise<GenerationRequest> {
+  const note = normalizePersonalRequest(requestText)
+  // La ruta original permanece disponible con la personalización desactivada.
+  if (!personalized && note) throw new Error('HGAI_PERSONALIZATION_DISABLED')
+  const {data,error}=personalized
+    ? await supabase.rpc('begin_my_home_gym_personalized_request', { p_request_text: note })
+    : await supabase.rpc('begin_my_home_gym_openai_request')
+  if(error)throw error
+  return parseRequest(data)
+}
+export async function beginAdjustmentRequest(planId: string, requestText: string): Promise<GenerationRequest> {
+  const note=normalizePersonalRequest(requestText)
+  if (!note) throw new Error('HGAI_ADJUSTMENT_TEXT_REQUIRED')
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(planId)) throw new Error('HGAI_ADJUSTMENT_PLAN_REQUIRED')
+  const {data,error}=await supabase.rpc('begin_my_home_gym_adjustment_request',{p_plan_id:planId,p_request_text:note})
   if(error)throw error
   return parseRequest(data)
 }
@@ -80,6 +99,20 @@ export async function applyOpenAIRequest(id: string): Promise<GenerationRequest>
   return parseRequest(data)
 }
 const MESSAGES: Record<string,string> = {
+  HGAI_ADJUSTMENT_DISABLED:'Los ajustes con IA aún no están habilitados. No se creó otra solicitud.',
+  HGAI_ADJUSTMENT_TEXT_REQUIRED:'Describe qué quieres cambiar antes de generar el ajuste.',
+  HGAI_ADJUSTMENT_PLAN_REQUIRED:'Ese plan ya no está activo o no está disponible. Vuelve a Mi plan y abre el ajuste desde allí.',
+  HGAI_ADJUSTMENT_PROFILE_CHANGED:'Tus preferencias cambiaron desde que se creó el plan. Crea un plan actualizado en vez de ajustar el anterior.',
+  HGAI_ADJUSTMENT_BASE_INVALID:'El plan de origen no cumple el contrato actual de IA. Crea uno nuevo; esta operación no generó otra llamada.',
+  HGAI_ADJUSTMENT_BASE_CHANGED:'El plan original cambió o se reemplazó. El ajuste pendiente ya no se puede aplicar.',
+  HGAI_ADJUSTMENT_BASE_TOO_LARGE:'El plan es demasiado grande para esta operación. No se enviará al proveedor.',
+  HGAI_ADJUSTMENT_VERSION_MISMATCH:'El servidor no confirmó que procesó la copia original del plan. Revisa el despliegue antes de repetir la generación.',
+  HGAI_PERSONALIZATION_DISABLED:'La personalización por texto aún no está habilitada. Actualiza el estado; tu plan se conserva.',
+  HGAI_PERSONALIZATION_VERSION_MISMATCH:'El servidor no pudo confirmar que procesó la petición. No se aplicó el plan. Revisa el despliegue antes de generar de nuevo.',
+  HGAI_PENDING_REQUEST_DIFFERENT:'Hay una propuesta o solicitud vigente con otra petición. Actualiza el estado y revísala antes de crear otra.',
+  HGAI_REQUEST_STATE_CHANGED:'La solicitud cambió de estado. Actualiza para revisarla; no se creó un segundo intento.',
+  HGAI_PREFERENCE_TOO_LONG:'La petición puede tener como máximo 500 caracteres.',
+  HGAI_INVALID_PREFERENCE:'La petición contiene caracteres no permitidos. Escribe una preferencia de entrenamiento en texto normal.',
   HGAI_UX2_SCHEMA_REQUIRED:'Falta actualizar el flujo de generación en la base de datos.',
   AUTH_REQUIRED:'Vuelve a iniciar sesión.',
   HGAI_DISABLED:'La generación con IA está desactivada. Las reglas de PlazaFit siguen disponibles.',
